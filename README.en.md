@@ -277,6 +277,7 @@ ir-agent/
 The documents below are written in Chinese.
 
 - [`docs/design/`](docs/design/) — design documents (fact ledger, corpus, formula decomposition, the three reviewers, DCF template, relative valuation…)
+- [`docs/FINANCE-METHODOLOGY.md`](docs/FINANCE-METHODOLOGY.md) — **the finance knowledge and methodology behind each step**: the concepts, the formulas, which scholar they come from, and which parts of the coursework are not implemented
 - [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) — engineering notes and lessons learned
 - [`ashare-dcf/README.md`](ashare-dcf/README.md) — full DCF engine guide (workbook layout, sensitivity, Monte Carlo, accounting decisions)
 

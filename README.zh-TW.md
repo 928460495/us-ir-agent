@@ -267,6 +267,7 @@ ir-agent/
 ## 文件
 
 - [`docs/design/`](docs/design/) —— 設計文件（事實賬本、語料庫、分解式公式化、三類審核者、DCF 模板、相對估值……）
+- [`docs/FINANCE-METHODOLOGY.md`](docs/FINANCE-METHODOLOGY.md) —— **金融知識與方法論匯總**：每個環節用到的知識、公式、出自哪位學者，以及哪些課程內容沒有實現
 - [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) —— 工程筆記與踩坑記錄
 - [`ashare-dcf/README.md`](ashare-dcf/README.md) —— DCF 引擎完整說明（工作簿結構、敏感性、蒙特卡洛、口徑決定）
 
