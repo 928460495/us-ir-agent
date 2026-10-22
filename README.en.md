@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-2%2C500%2B%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2%2C600%2B%20passing-brightgreen)
 ![LLM](https://img.shields.io/badge/LLM-Claude-D97757)
 
 [简体中文](README.md) · [繁體中文](README.zh-TW.md) · **English**
@@ -15,7 +15,7 @@
 
 ---
 
-Give ir-agent a stock code and a reporting year, and it runs a sell-side analyst's full workflow. It collects announcements, financial statements, quotes, broker research and public web pages, then analyzes the macro backdrop, strategy and value chain. Two rounds of bull/bear debate shape the revenue and margin drivers, and the agent fills in the DCF judgment inputs. The output is **a formula-driven, cell-by-cell verifiable three-statement DCF model** and **a complete research report**.
+Give ir-agent a stock code and a reporting year, and it runs a sell-side analyst's full workflow. It collects announcements, financial statements, quotes, broker research and public web pages, then analyzes the macro backdrop, strategy and value chain. Two rounds of bull/bear debate shape the revenue and margin drivers, and the agent fills in the DCF judgment inputs. The output is **a formula-driven, cell-by-cell verifiable three-statement DCF model** and **a complete research report** — DCF and relative valuation cross-check each other, and the report delivers a valuation range rather than a single target price.
 
 It is built against two failure modes of LLM-written research: **fabricated numbers**, and **judgments that reach the valuation without scrutiny**.
 
@@ -30,6 +30,7 @@ It is built against two failure modes of LLM-written research: **fabricated numb
 | ⚖️ **Writer + reviewer** | Two AIs share every judgment step. Code only checks facts and never rules. The reviewer answers a checklist generated from the methodology, giving one of four verdicts per item. Fatal items go back to the writer with fix suggestions. |
 | 🧭 **Falsification, not agreement** | A bull/bear debate before modeling stops one-sided evidence picking. A debate after drafting challenges the text line by line, and every upheld challenge must be written back into the report. |
 | 📊 **Professional three-statement DCF engine** | The engine links the three statements, forces the balance sheet to balance and keeps the terminal value Damodaran-consistent. It adds five sensitivity grids and Monte Carlo simulation. Everything is a live formula, recomputed cell by cell by a formula engine after generation. |
+| 🔀 **Multi-method cross-check** | DCF's three cases, the Monte Carlo distribution and relative valuation (multiples from six comparables plus industry-wide cross-sectional regressions) run side by side and are reconciled. The writer states the combined range, whose endpoints must come from methods already on the table, and the report debate challenges that choice. No target price. |
 | 🚦 **A human is the final gate** | Three human sign-off gates; the run refuses to start without the signature. Any failed step can be rerun on its own, and steps that passed are reused. |
 
 ## System overview
@@ -54,7 +55,8 @@ flowchart TB
         A2["Debate ① → methodology → factor collection → debate ②"]
         A3["DCF judgment inputs"]
     end
-    DCF["Three-statement DCF engine<br/>ashare-dcf/"]
+    DCF["Three-statement DCF engine<br/>ashare-dcf/ · Monte Carlo"]
+    RV["Relative valuation<br/>comparables · industry regression"]
     subgraph R["Report"]
         R1["Analyst drafting · placeholders only"]
         R2["Rendering · audit · attribution checks"]
@@ -70,6 +72,8 @@ flowchart TB
     L --> DCF
     A --> R1 --> R2 --> R3
     DCF --> R1
+    L --> RV --> R1
+    DCF --> RV
 ```
 
 ## Workflow: four calls, three gates
@@ -81,7 +85,7 @@ flowchart LR
     B --> G2{{"Gate ②<br/>review the brief"}}
     G2 --> C["③ --assume<br/>AI fills DCF inputs"]
     C --> G3{{"Gate ③<br/>approve inputs"}}
-    G3 --> D["④ --value<br/>three-statement DCF<br/>full report · debate"]
+    G3 --> D["④ --value<br/>DCF · Monte Carlo · relative valuation<br/>full report · debate"]
 ```
 
 | Call | What it does | Handed to the human |
@@ -89,7 +93,7 @@ flowchart LR
 | ① `--analyse` | Quantitative collection and corpus ingestion; macro view, strategy and value chain (each written and reviewed) | Source list (origin, local file and raw snapshot of every document) plus the review verdicts of the three qualitative modules |
 | ② `--brief` | Debate ① → methodology research (a decomposition formula for revenue and gross margin) → targeted factor collection → debate ② (bear / balance / bull values per factor) → research brief | Brief, open-items list, decomposition, balance points |
 | ③ `--assume` | AI fills three cases per factor per year; code synthesizes the revenue and margin paths | Every row's value, rationale, evidence and review verdict |
-| ④ `--value` | Three-statement DCF → full report → report debate → write-back | Report and DCF workbook |
+| ④ `--value` | Three-statement DCF plus Monte Carlo → relative valuation → full report (multi-method cross-check, combined range) → report debate → write-back | Report and DCF workbook (with the Monte Carlo and relative-valuation sheets) |
 
 Each call first rebuilds the deterministic layer, which makes no model calls, then reads back the previous call's artifacts. A failed step is rerun on its own. Anything a human edits is labeled "edited by hand, not reviewed" all the way into the report appendix.
 
@@ -155,6 +159,21 @@ flowchart LR
 4. **Debate ②**: each factor gets a (bear, balance, bull) triple that anchors the three cases of the judgment inputs; any deviation must be justified.
 5. **First-year anchoring**: if quarterly results for the current year are out, the first forecast year is estimated by quarter. Published quarters use actuals; the remaining quarters extrapolate the year-to-date year-over-year growth. All three cases are identical. When the estimate isn't possible, the reason is stated and the judgment inputs are used.
 
+### Valuation: a multi-method cross-check
+
+The second phase runs two more families of methods next to the DCF. Section 8 of the report reconciles them one by one, and the writer ends with a combined range:
+
+| Method | How | The question it answers |
+|---|---|---|
+| DCF, three cases | The bear / base / bull judgment inputs a human approved at gate ③, each modeled through the three statements | Where the upper and lower bounds of the analytical judgment sit |
+| Monte Carlo | Sampling from the company's own historical volatility and the growth–margin correlation; reports P5–P95, the probability of exceeding the current price, and a tornado chart | Where outcomes scatter if history's swings repeat |
+| Comparables | The same six comparables (excluding the subject), taking P25 / median / P75 of PE (TTM), PB and EV/EBITDA times the subject's own metric; EV includes minority interest | Whether the stock is expensive against its peers |
+| Industry regression | Cross-sectional regressions over the whole SW industry — PB on ROE, PE on revenue growth — giving the subject's "deserved" multiple and an 80% (P10–P90) prediction interval | How much the subject's ROE and growth are worth as a premium |
+
+- **Step 4 of the four-step method is a regression, not a hand adjustment.** With only six comparables a regression is noise, so it runs on the whole industry. A regression is marked unusable if the sample is under 15 names, the slope has the wrong sign, the slope is insignificant, or the deserved multiple is not positive — it is then shown but kept out of the range, while its statistics still enter the ledger so they can be checked.
+- **One set of definitions.** PE's denominator is the latest TTM net profit attributable to the parent that was disclosed by the valuation date, and peers are aligned to the subject's cut-off quarter (falling back to the previous quarter when that one is not out yet). The remaining inputs come from the most recent complete fiscal year. Peer multiples are always computed from the ledger with the same algorithm, never taken from the quote feed's own PE / PB fields.
+- **The combined range is not an average.** Each endpoint has to be an endpoint some method already produced; the writer says which method they trust more and why, and the report debate targets that choice. The report must state the caveat: when a whole industry is expensive, looking cheap against peers is not the same as being cheap.
+
 ### Two kinds of debate
 
 - **Bull/bear debate** (before modeling): both sides face the same evidence, and the adjudicator may only pick a balance point inside the range the two sides staked out. This stops one-sided evidence picking.
@@ -172,6 +191,7 @@ The engine also works on its own: give it an A-share code and it produces a **fu
 | `5_DCF` | WACC, PV of FCFF, normalized terminal value, EV → per share, reverse DCF, five sensitivity grids |
 | `7_财务比率与杜邦` (Ratios & DuPont) | Five ratio groups, three- and five-factor DuPont, charts — all live formulas |
 | `8_蒙特卡洛` (Monte Carlo) | Correlated sampling (Cholesky), distribution statistics, tornado chart; parameters live in Excel, computation in Python |
+| `9_相对估值` (Relative valuation) | Appended by ir-agent's second phase: the comparables table (implied values as live formulas), two regression scatter charts, and a football-field chart putting every method's range on one axis against the current price |
 
 - **Methodology**: Damodaran-consistent terminal value (`RR = g / ROIC`); mid-year discounting; non-operating assets added back; two treatments of minority interests; a separate terminal tax rate.
 - **Built-in verification**: after generation, the `formulas` engine executes the workbook and compares every cell against an independent Python recomputation. It checks that the balance sheet balances, the full DCF chain, the DuPont identities, and that each sensitivity grid's center reproduces the base case. Any failure exits non-zero, and no broken file is delivered.
@@ -225,7 +245,7 @@ ir-agent/
 │   ├── operators/         Deterministic operators (DuPont, ratios, TTM, quarter splits…)
 │   ├── validate/          Statement reconciliation, cross-source checks, adjudication
 │   ├── clients/           Model calls (claude -p)
-│   └── *.py               Ledger, qualitative analysis, debates, methodology, judgment inputs, drafting, orchestration
+│   └── *.py               Ledger, qualitative analysis, debates, methodology, judgment inputs, relative valuation, drafting, orchestration
 ├── ashare-dcf/            Three-statement DCF engine (calibration, modeling, verification, Monte Carlo)
 ├── tests/                 ir-agent tests
 ├── docs/
@@ -250,12 +270,13 @@ ir-agent/
 - Free sources have no reliable consensus estimates.
 - Some sources (East Money macro pages, numbers extracted from research PDFs) cannot keep the raw API response; the audit lists them separately.
 - The pipeline runs serially: concurrency needs a rate-limiting strategy for East Money first.
+- Apart from PE, relative valuation's inputs (PB's book equity, the EV components, EBITDA, ROE and growth) come from the most recent complete fiscal year rather than the latest quarter; in A-shares, depreciation and amortization are only disclosed in the interim and annual reports.
 
 ## Documentation
 
 The documents below are written in Chinese.
 
-- [`docs/design/`](docs/design/) — design documents (fact ledger, corpus, formula decomposition, the three reviewers, DCF template…)
+- [`docs/design/`](docs/design/) — design documents (fact ledger, corpus, formula decomposition, the three reviewers, DCF template, relative valuation…)
 - [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) — engineering notes and lessons learned
 - [`ashare-dcf/README.md`](ashare-dcf/README.md) — full DCF engine guide (workbook layout, sensitivity, Monte Carlo, accounting decisions)
 
