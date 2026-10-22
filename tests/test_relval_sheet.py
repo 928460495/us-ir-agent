@@ -189,3 +189,23 @@ def test_可比表列出每家的利润口径(wb):
     res.comps_peers[0].np_basis = "TTM 截至 2026Q1"
     write_sheet(wb, res, DCF_OK)
     assert "利润口径" in _text(wb) and "TTM 截至 2026Q1" in _text(wb)
+
+
+def test_可比表列出存量与流量口径(wb):
+    from ir_agent.relval_sheet import write_sheet
+    res = _res()
+    res.comps_peers[0].bs_basis = "2025FY"
+    res.comps_peers[0].flow_basis = "TTM 截至 2025FY"
+    for p in res.comps_peers[1:]:
+        p.bs_basis, p.flow_basis = "2026H1", "TTM 截至 2026H1"
+    write_sheet(wb, res, DCF_OK)
+    t = _text(wb)
+    assert "余额期" in t and "EBITDA 口径" in t
+    assert "2025FY" in t and "TTM 截至 2026H1" in t
+
+
+def test_页头写明存量与流量各取什么(wb):
+    from ir_agent.relval_sheet import write_sheet
+    write_sheet(wb, _res(), DCF_OK)
+    t = _text(wb)
+    assert "最近一期余额" in t and "折旧摊销只在中报与年报披露" in t

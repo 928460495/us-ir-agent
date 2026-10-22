@@ -42,7 +42,7 @@ class _W:
     def title(self, text: str) -> None:
         c = self.ws.cell(self.r, 1, text)
         c.font, c.fill = F_HDR, P_N
-        for col in range(2, 11):
+        for col in range(2, 13):
             self.ws.cell(self.r, col).fill = P_N
         self.r += 1
 
@@ -70,8 +70,10 @@ def _header(res: RelvalResult, w: _W) -> None:
     w.row("行业（回归样本）", f"{res.industry}，样本 {res.sample_size} 家（不含本司）")
     w.row("口径", "PE = 市值 ÷ 归母净利润（优先 TTM）；PB = 市值 ÷ 归母净资产；"
                   "EV = 市值 + 有息负债 − 现金 + 少数股东权益（与可比坐标表同一口径）")
-    w.row("期间", "利润、EBITDA、净资产等取最近完整财年（报告期为中报时取上一年年报），"
-                  "本司与同业同一期间；市值取同一报价日")
+    w.row("期间", "存量（净资产、现金、有息负债、少数股东权益）取最近一期余额；"
+                  "流量（利润、EBITDA、营收增速）取 TTM —— A 股折旧摊销只在中报与年报披露，"
+                  "故 EBITDA 的 TTM 截止期只能是中报或年报。同业对齐本司，没出则退一期并标注；"
+                  "算不出时退回最近完整财年。市值取同一报价日")
     w.row("剔除规则", "本司、净资产为负、亏损、缺数，以及倍数落在样本 P5–P95 之外的两端")
     w.row("区间", "可比法取同业 P25／中位数／P75；回归取 P10–P90 预测区间（与蒙特卡洛龙卷风同口径）")
     for n in res.sample_notes:
@@ -82,12 +84,13 @@ def _header(res: RelvalResult, w: _W) -> None:
 def _comps(res: RelvalResult, w: _W) -> None:
     w.title("一、可比法（沿用原 6 家可比）")
     w.row("公司", "代码", "市值（亿元）", "归母净利润（亿元）", "归母净资产（亿元）",
-          "EBITDA（亿元）", "PE", "PB", "EV/EBITDA", "利润口径", bold=True, fill=P_B)
+          "EBITDA（亿元）", "PE", "PB", "EV/EBITDA", "利润口径", "余额期",
+          "EBITDA 口径", bold=True, fill=P_B)
     for p in res.comps_peers:
         m = multiples(p)
         w.row(p.name, p.code, _yi(p.market_cap), _yi(p.net_profit), _yi(p.equity_parent),
               _yi(p.ebitda), *(float(m[k]) if m[k] is not None else "—" for k in KINDS),
-              p.np_basis, fmt=NUM)
+              p.np_basis, p.bs_basis, p.flow_basis, fmt=NUM)
     w.gap()
 
     t = res.target
@@ -250,7 +253,7 @@ def write_sheet(path: str, res: RelvalResult, dcf_res) -> None:
     ws = wb.create_sheet(SHEET)
     ws.sheet_properties.tabColor = "548235"
     ws.column_dimensions["A"].width = 30
-    for col in "BCDEFGHIJ":
+    for col in "BCDEFGHIJKL":
         ws.column_dimensions[col].width = 16
     w = _W(ws)
     _header(res, w)

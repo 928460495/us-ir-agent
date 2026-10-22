@@ -49,6 +49,13 @@ def _prev_quarter(q: tuple[int, int]) -> tuple[int, int]:
     return (y, n - 1) if n > 1 else (y - 1, 4)
 
 
+_CUM_SUFFIX = {1: "Q1", 2: "H1", 3: "Q1-Q3", 4: "FY"}
+
+
+def _label(q: tuple[int, int]) -> str:
+    return f"{q[0]}{_CUM_SUFFIX[q[1]]}"
+
+
 def _peer_ttm(led: FactLedger, end: tuple[int, int] | None,
               as_of: date) -> tuple[Decimal, str] | None:
     """同业 PE 分母：对齐本司的截止季度；该季没出就用上一季的 TTM（用户决定）。
@@ -61,11 +68,105 @@ def _peer_ttm(led: FactLedger, end: tuple[int, int] | None,
         f = ttm.ttm_at(led, "net_profit_attr_parent", q[0], q[1], as_of=as_of)
         if f is not None:
             return f.value, f"TTM 截至 {f.period}"
+        # 拆单季要有一季报 / 三季报的累计数；缺它们时用半年度公式（与 EBITDA 同路径）
+        if q[1] in _HALF_ENDS:
+            v = flow_ttm(led, "net_profit_attr_parent", q, as_of)
+            if v is not None:
+                return v, f"TTM 截至 {_label(q)}"
     return None
 
 
-def _growth(led: FactLedger, period: str, as_of: date) -> tuple[Decimal | None, str]:
-    """三年营收复合增速；缺数据退回一年。"""
+# ── 存量与流量：取更近的数 ──────────────────────────────────────
+# 存量（净资产、现金、有息负债、少数股东权益）是某一时点的余额，可以直接取最近
+# 一期报表；流量（营业利润、折旧摊销、利息、营收）要滚动十二个月。
+#
+# **A 股折旧摊销只在中报与年报披露**（现金流量表补充资料），所以流量 TTM 的截止期
+# 只能是 H1 或 FY。好在半年度 TTM = 本期 H1 + 上年 FY − 上年 H1，恰好只用这两期，
+# 不需要拆单季。
+
+_HALF_ENDS = (2, 4)
+_EBITDA_PARTS = ("operating_profit", "depreciation_amortization", "interest_expense_fe")
+
+
+def balance_period(led: FactLedger, as_of: date, probe: str = "equity_attr_parent") -> str | None:
+    """存量取哪一期：probe 已披露的最新累计期间（如 2026H1）。"""
+    from ir_agent.operators.ttm import latest_visible
+
+    f = latest_visible(led, probe, as_of)
+    return f.period if f is not None else None
+
+
+def _ensure_da(led: FactLedger, period: str, as_of: date) -> None:
+    """折旧摊销在报表里只有分量，合计由 aggregates 算 —— 用到哪期就先算那期。"""
+    from ir_agent.operators import aggregates
+
+    try:
+        aggregates.compute(led, period, as_of)
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
+def flow_ttm(led: FactLedger, key: str, end: tuple[int, int],
+             as_of: date) -> Decimal | None:
+    """截至 end 的流量 TTM。end 的季度必须是 2（中报）或 4（年报）。"""
+    y, q = end
+    if q == 4:
+        return _v(led, key, _label((y, 4)), as_of)
+    if q != 2:
+        return None
+    cur = _v(led, key, _label((y, 2)), as_of)
+    prev_fy = _v(led, key, _label((y - 1, 4)), as_of)
+    prev_h1 = _v(led, key, _label((y - 1, 2)), as_of)
+    if None in (cur, prev_fy, prev_h1):
+        return None
+    return cur + prev_fy - prev_h1
+
+
+def flow_end(led: FactLedger, as_of: date) -> tuple[int, int] | None:
+    """流量 TTM 取哪一期：EBITDA 三个分量都算得出来的最新 H1 / FY。"""
+    cands: list[tuple[int, int]] = []
+    for f_end in sorted({(int(p[:4]), _Q_OF.get(p[4:]))
+                         for k, p in list(led._facts)              # noqa: SLF001
+                         if k == "operating_profit" and _Q_OF.get(p[4:]) in _HALF_ENDS},
+                        reverse=True):
+        cands.append(f_end)
+    for end in cands:
+        for per in (_label(end), _label((end[0] - 1, 4)), _label((end[0] - 1, 2))):
+            _ensure_da(led, per, as_of)
+        if all(flow_ttm(led, k, end, as_of) is not None for k in _EBITDA_PARTS):
+            return end
+    return None
+
+
+_Q_OF = {"Q1": 1, "H1": 2, "Q1-Q3": 3, "FY": 4}
+
+
+def _ebitda_ttm(led: FactLedger, end: tuple[int, int] | None,
+                as_of: date) -> tuple[Decimal, str] | None:
+    """EBITDA = 营业利润 + 折旧摊销 + max(利息费用, 0)，三项都取同一截止期的 TTM。
+    同业没出本期就退上一期（与 PE 同一规则）。"""
+    if end is None:
+        return None
+    for q in (end, _prev_quarter(end) if end[1] == 4 else (end[0] - 1, 4)):
+        for per in (_label(q), _label((q[0] - 1, 4)), _label((q[0] - 1, 2))):
+            _ensure_da(led, per, as_of)
+        vals = [flow_ttm(led, k, q, as_of) for k in _EBITDA_PARTS]
+        if all(v is not None for v in vals):
+            op, da, ie = vals
+            return op + da + max(ie, Decimal(0)), f"TTM 截至 {_label(q)}"
+    return None
+
+
+def _growth(led: FactLedger, period: str, as_of: date,
+            end: tuple[int, int] | None) -> tuple[Decimal | None, str]:
+    """营收三年复合增速。优先用 TTM 营收（与倍数同口径），缺数据退回年报三年、再退一年。"""
+    if end is not None:
+        now = flow_ttm(led, "revenue", end, as_of)
+        then = flow_ttm(led, "revenue", (end[0] - 3, end[1]), as_of)
+        if now and then and now > 0 and then > 0:
+            g = (float(now) / float(then)) ** (1 / 3) - 1
+            # 截止期是年报时 TTM 就是该财年，标签照实写
+            return Decimal(str(round(g, 10))), "3y" if end[1] == 4 else "TTM 3y"
     y = int(period[:4])
     now = _v(led, "revenue", f"{y}FY", as_of)
     if now is None or now <= 0:
@@ -80,11 +181,13 @@ def _growth(led: FactLedger, period: str, as_of: date) -> tuple[Decimal | None, 
 
 def obs_from_ledger(code: str, name: str, led: FactLedger, period: str,
                     as_of: date, market_cap: Decimal,
-                    np_ttm: tuple[Decimal, str] | None = None) -> PeerObs:
-    """账本 → 观测。基本面取 period（最近完整财年）；PE 分母取最新 TTM。
+                    np_ttm: tuple[Decimal, str] | None = None,
+                    bs_period: str | None = None,
+                    flow_end_q: tuple[int, int] | None = None) -> PeerObs:
+    """账本 → 观测。存量取最近一期余额，流量取 TTM，缺数据退回 period（最近完整财年）。
 
-    np_ttm 给定时直接用（同业：已对齐本司截止季度）；否则取账本里最新一期的
-    net_profit_ttm（本司：pipeline 已算好，如 net_profit_ttm@2026H1）；都没有退回年报。
+    np_ttm / bs_period / flow_end_q 给定时按它们取（同业：已对齐本司）；本司由账本自测。
+    ROE 由 TTM 利润 ÷ 最新净资产算出，与 PB ÷ PE 自洽，不读账本里按年报算的 roe。
     """
     from ir_agent.operators.aggregates import DEBT_PARTS
     from ir_agent.operators.ttm import latest_visible
@@ -95,33 +198,49 @@ def obs_from_ledger(code: str, name: str, led: FactLedger, period: str,
         net_profit, basis = np_ttm
     else:
         net_profit, basis = _v(led, "net_profit_attr_parent", period, as_of), "FY"
-    op = _v(led, "operating_profit", period, as_of)
-    da = _v(led, "depreciation_amortization", period, as_of)
-    ie = _v(led, "interest_expense_fe", period, as_of)
-    ebitda = (op + da + max(ie or Decimal(0), Decimal(0))
-              if op is not None and da is not None else None)
-    debt = sum((v for k in DEBT_PARTS if (v := _v(led, k, period, as_of)) is not None),
-               Decimal(0))
-    growth, gbasis = _growth(led, period, as_of)
+
+    # 存量：对齐给定的余额期；该期没出就退回 period
+    bs = bs_period or balance_period(led, as_of) or period
+    if _v(led, "equity_attr_parent", bs, as_of) is None:
+        bs = period
+    def bv(key: str) -> Decimal | None:
+        return _v(led, key, bs, as_of)
+    debt = sum((v for k in DEBT_PARTS if (v := bv(k)) is not None), Decimal(0))
+
+    # 流量：EBITDA 与增速
+    fe = flow_end_q if flow_end_q is not None else flow_end(led, as_of)
+    eb = _ebitda_ttm(led, fe, as_of)
+    if eb is None:
+        op, da, ie = (_v(led, k, period, as_of) for k in _EBITDA_PARTS)
+        if op is not None and da is not None:
+            eb = (op + da + max(ie or Decimal(0), Decimal(0)), f"FY {period}")
+    growth, gbasis = _growth(led, period, as_of, fe)
+
+    equity_parent = bv("equity_attr_parent")
+    roe = (net_profit / equity_parent
+           if net_profit is not None and equity_parent and equity_parent > 0 else None)
     return PeerObs(code=code, name=name, market_cap=market_cap,
                    net_profit=net_profit, np_basis=basis,
-                   equity_parent=_v(led, "equity_attr_parent", period, as_of),
-                   total_equity=_v(led, "total_equity", period, as_of),
-                   debt=debt, cash=_v(led, "cash_and_equivalents", period, as_of),
-                   ebitda=ebitda, roe=_v(led, "roe", period, as_of),
-                   growth=growth, growth_basis=gbasis)
+                   equity_parent=equity_parent, total_equity=bv("total_equity"),
+                   debt=debt, cash=bv("cash_and_equivalents"),
+                   ebitda=eb[0] if eb else None, roe=roe,
+                   growth=growth, growth_basis=gbasis,
+                   bs_basis=bs, flow_basis=eb[1] if eb else "")
 
 
 def obs_from_facts(code: str, name: str, facts: dict, period: str,
                    market_cap: Decimal, as_of: date,
-                   ttm_end: tuple[int, int] | None = None) -> PeerObs:
-    """同业：报表事实 → 账本 → 补派生事实 → 观测。ttm_end 是本司 TTM 的截止季度。"""
+                   ttm_end: tuple[int, int] | None = None,
+                   bs_period: str | None = None,
+                   flow_end: tuple[int, int] | None = None) -> PeerObs:
+    """同业：报表事实 → 账本 → 补派生事实 → 观测。三个口径都对齐本司。"""
     led = FactLedger()
     for f in facts.values():
         led.put(f)
     _prepare(led, period, as_of)
     return obs_from_ledger(code, name, led, period, as_of, market_cap,
-                           np_ttm=_peer_ttm(led, ttm_end, as_of))
+                           np_ttm=_peer_ttm(led, ttm_end, as_of),
+                           bs_period=bs_period, flow_end_q=flow_end)
 
 
 def fund_period(period: str) -> str:
@@ -172,6 +291,9 @@ def gather(r, as_of: date, snapshot_dir):
     # 本司 PE 分母的截止季度 —— 同业对齐它（没出就退上一季）
     from ir_agent.operators.ttm import latest_quarter
     ttm_end = latest_quarter(r.ledger, "net_profit_attr_parent", as_of)
+    # 存量与流量的截止期同样由本司定，同业对齐（没出则退一期）
+    tgt_bs = balance_period(r.ledger, as_of)
+    tgt_flow = flow_end(r.ledger, as_of)
 
     symbols = [quote_symbol(c) for c in codes]
     try:
@@ -198,13 +320,15 @@ def gather(r, as_of: date, snapshot_dir):
             notes.append(f"{c} {name}：截至估值时点未披露 {fp} 财报，剔除（不用上期凑）")
             continue
         sample.append(obs_from_facts(c, name, cache[c], fp, q["market_cap"], as_of,
-                                     ttm_end=ttm_end))
+                                     ttm_end=ttm_end, bs_period=tgt_bs,
+                                     flow_end=tgt_flow))
 
     try:
         aggregates.compute(r.ledger, fp, as_of)
     except Exception:                                       # noqa: BLE001
         pass
-    target = obs_from_ledger(tcode, peers.target_name, r.ledger, fp, as_of, mc_fact.value)
+    target = obs_from_ledger(tcode, peers.target_name, r.ledger, fp, as_of, mc_fact.value,
+                             bs_period=tgt_bs, flow_end_q=tgt_flow)
 
     by_code = {o.code: o for o in sample}
     comps_codes = getattr(r, "comps_codes", None) or []

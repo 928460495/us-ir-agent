@@ -42,13 +42,18 @@ def _obs(facts, code="002384"):
     return obs_from_facts(code, "某同业", facts, "2025FY", D(1000), AS_OF)
 
 
-def test_ROE与账本同一算子链():
+def test_ROE由TTM利润除净资产算出而不读账本():
+    """与倍数口径自洽（ROE = PB ÷ PE）。只有年报数据时，它与账本按年报算的 roe 相等。"""
     led = FactLedger()
     for f in facts_years().values():
         led.put(f)
     margins.compute(led, "2025FY", as_of=AS_OF)
     dupont.compute(led, "2025FY", as_of=AS_OF)
-    assert _obs(facts_years()).roe == led.get("roe", "2025FY", as_of=AS_OF).value
+    o = _obs(facts_years())
+    assert o.roe == o.net_profit / o.equity_parent
+    # 账本的 roe 是净利率 × 周转率 × 权益乘数三连乘，末位有舍入差；直接相除更干净
+    assert float(o.roe) == pytest.approx(
+        float(led.get("roe", "2025FY", as_of=AS_OF).value), rel=1e-20)
 
 
 def test_三年增速与一年退路():
@@ -270,3 +275,96 @@ def test_季度数据都没有就退回年报(monkeypatch, tmp_path):
     r = _target_with_h1(fake_r({"002384": facts_years()}))
     _, sample, _, _, _, _ = gather(r, AS_OF, tmp_path)
     assert sample[0].net_profit == D(10) and sample[0].np_basis == "FY"
+
+
+# ── 除 PE 外的输入也取更近的数：存量用最近一期余额，流量用 TTM ─────────────
+# A 股折旧摊销只在中报与年报披露（现金流量表补充资料），所以流量 TTM 的截止期
+# 只能是 H1 或 FY；半年度 TTM = 本期 H1 + 上年 FY − 上年 H1，恰好只用这两期。
+
+_FLOWS = {
+    "revenue":                 {"2022H1": 50, "2022FY": 100, "2023H1": 55, "2023FY": 110,
+                                "2024FY": 121, "2025H1": 60, "2025FY": 133.1, "2026H1": 80},
+    "operating_profit":        {"2022FY": 10, "2023FY": 11, "2025H1": 7, "2025FY": 15, "2026H1": 9},
+    "depreciation_fixed_asset": {"2025H1": 3, "2025FY": 7, "2026H1": 4},
+    "interest_expense_fe":     {"2025H1": 0.4, "2025FY": 1, "2026H1": 0.5},
+}
+_BALANCE = {
+    "equity_attr_parent": {"2025FY": 50, "2026H1": 55},
+    "total_equity":       {"2025FY": 60, "2026H1": 66},
+    "total_assets":       {"2025FY": 120, "2026H1": 130},
+    "cash_and_equivalents": {"2025FY": 5, "2026H1": 6},
+    "short_loan":         {"2025FY": 20, "2026H1": 22},
+}
+_DISC = {"2022H1": date(2022, 8, 20), "2022FY": date(2023, 4, 25),
+         "2023H1": date(2023, 8, 20), "2023FY": date(2024, 4, 25),
+         "2024FY": date(2025, 4, 25), "2025H1": date(2025, 8, 20),
+         "2025FY": date(2026, 4, 25), "2026H1": date(2026, 8, 20)}
+
+
+def facts_full(skip_2026h1=False):
+    """年报序列 + 2026 中报；skip_2026h1 模拟同业还没出中报。"""
+    out = {}
+    for key, by_per in {**_FLOWS, **_BALANCE}.items():
+        for per, v in by_per.items():
+            if skip_2026h1 and per == "2026H1":
+                continue
+            out[(key, per)] = F(key, per, v, _DISC[per])
+    cum = {"2025H1": 5, "2025FY": 10, "2026H1": 8}
+    for per, v in cum.items():
+        if skip_2026h1 and per == "2026H1":
+            continue
+        out[("net_profit_attr_parent", per)] = F("net_profit_attr_parent", per, v, _DISC[per])
+    return out
+
+
+def _obs_full(**kw):
+    return obs_from_facts("002384", "某同业", facts_full(**kw), "2025FY", D(1000), AS_OF,
+                          bs_period="2026H1", flow_end=(2026, 2),
+                          ttm_end=(2026, 2))
+
+
+def test_存量取最近一期余额():
+    o = _obs_full()
+    assert o.equity_parent == D(55) and o.total_equity == D(66)     # 2026 中报，不是年报的 50/60
+    assert o.cash == D(6) and o.debt == D(22)
+    assert o.minority == D(11)
+    assert o.bs_basis == "2026H1"
+
+
+def test_EBITDA取半年度TTM():
+    """营业利润 15−7+9=17；折旧 7−3+4=8；利息 1−0.4+0.5=1.1 → 26.1。"""
+    o = _obs_full()
+    assert o.ebitda == D("26.1") and o.flow_basis == "TTM 截至 2026H1"
+
+
+def test_ROE用TTM利润除最新净资产():
+    """与倍数口径自洽：ROE = PB ÷ PE。"""
+    o = _obs_full()
+    assert o.net_profit == D(13) and o.roe == D(13) / D(55)
+    from ir_agent.relval import multiples
+    m = multiples(o)
+    # Decimal 连除末位有舍入差，比到 20 位足以证明两者同源
+    assert float(m["pb"] / m["pe"]) == pytest.approx(float(o.roe), rel=1e-20)
+
+
+def test_增速用TTM营收的三年复合():
+    """TTM 营收 133.1−60+80=153.1；三年前同期 100−50+55=105。"""
+    o = _obs_full()
+    assert o.growth_basis == "TTM 3y"
+    assert float(o.growth) == pytest.approx((153.1 / 105) ** (1 / 3) - 1, rel=1e-6)
+
+
+def test_同业没出本期就退上一期并标注():
+    o = _obs_full(skip_2026h1=True)
+    assert o.equity_parent == D(50) and o.bs_basis == "2025FY"
+    assert o.ebitda == D(15 + 7 + 1) and o.flow_basis == "TTM 截至 2025FY"
+
+
+def test_gather给出本司的存量与流量截止期(monkeypatch, tmp_path):
+    _patch_quotes(monkeypatch, ["600183", "002384"])
+    r = fake_r({"002384": facts_full()})
+    for f in facts_full().values():
+        r.ledger.put(f)
+    tgt, sample, _, _, _, _ = gather(r, AS_OF, tmp_path)
+    assert tgt.bs_basis == "2026H1" and tgt.flow_basis == "TTM 截至 2026H1"
+    assert sample[0].bs_basis == "2026H1"

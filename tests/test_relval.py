@@ -361,3 +361,10 @@ def test_利润口径与本司不同的同业在PE回归里标出():
     r = regress("pe_growth", s, _tgt(growth=D("0.2"), net_profit=D(1),
                                     np_basis="TTM 截至 2026H1"), D(1))
     assert "TTM 截至 2026Q1" in r.flags.get("000003", "")
+
+
+def test_净资产余额期与本司不同的同业在PB回归里标出():
+    s = _pb_sample()
+    s[2].bs_basis = "2025FY"
+    r = regress("pb_roe", s, _tgt(roe=D("0.2"), bs_basis="2026H1"), D(1))
+    assert "2025FY" in r.flags.get("000002", "")

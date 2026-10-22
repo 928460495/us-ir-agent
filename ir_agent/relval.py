@@ -49,7 +49,11 @@ class PeerObs:
     ebitda: Decimal | None
     roe: Decimal | None
     growth: Decimal | None            # 三年营收复合增速，退路为一年
-    growth_basis: str                 # "3y" / "1y" / ""
+    growth_basis: str                 # "TTM 3y" / "3y" / "1y" / ""
+    # 存量（净资产、现金、负债）取的余额期；流量（EBITDA）取的 TTM 截止期。
+    # 同业对齐本司，没出就退上一期 —— 逐家标在页面上。
+    bs_basis: str = ""
+    flow_basis: str = ""
 
     @property
     def minority(self) -> Decimal | None:
@@ -196,6 +200,8 @@ def _screen(kind: str, peers: list[PeerObs], target: PeerObs):
             if yk == "pe" and p.np_basis != target.np_basis:
                 # 同业还没出本司最新那一季，用了上一季 TTM 或年报（用户决定）—— 逐家标出
                 marks.append(f"利润 {p.np_basis}")
+            if yk == "pb" and p.bs_basis and p.bs_basis != target.bs_basis:
+                marks.append(f"净资产 {p.bs_basis}")
             if marks:
                 flags[p.code] = "；".join(marks)
     if len(rows) >= 3:
