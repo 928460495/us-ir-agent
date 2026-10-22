@@ -171,7 +171,7 @@ The second phase runs two more families of methods next to the DCF. Section 8 of
 | Industry regression | Cross-sectional regressions over the whole SW industry — PB on ROE, PE on revenue growth — giving the subject's "deserved" multiple and an 80% (P10–P90) prediction interval | How much the subject's ROE and growth are worth as a premium |
 
 - **Step 4 of the four-step method is a regression, not a hand adjustment.** With only six comparables a regression is noise, so it runs on the whole industry. A regression is marked unusable if the sample is under 15 names, the slope has the wrong sign, the slope is insignificant, or the deserved multiple is not positive — it is then shown but kept out of the range, while its statistics still enter the ledger so they can be checked.
-- **One set of definitions.** PE's denominator is the latest TTM net profit attributable to the parent that was disclosed by the valuation date, and peers are aligned to the subject's cut-off quarter (falling back to the previous quarter when that one is not out yet). The remaining inputs come from the most recent complete fiscal year. Peer multiples are always computed from the ledger with the same algorithm, never taken from the quote feed's own PE / PB fields.
+- **One set of definitions.** PE's denominator is the latest TTM net profit attributable to the parent that was disclosed by the valuation date, and peers are aligned to the subject's cut-off quarter (falling back to the previous quarter when that one is not out yet). Stock items (book equity, cash, interest-bearing debt, minority interest) come from the latest reported balance sheet, and the remaining flow items are trailing twelve months — in A-shares depreciation and amortization are only disclosed in the interim and annual reports, so EBITDA's TTM can only end at an interim or annual period. ROE is TTM profit over the latest book equity, which keeps it consistent with PB ÷ PE. Peer multiples are always computed from the ledger with the same algorithm, never taken from the quote feed's own PE / PB fields.
 - **The combined range is not an average.** Each endpoint has to be an endpoint some method already produced; the writer says which method they trust more and why, and the report debate targets that choice. The report must state the caveat: when a whole industry is expensive, looking cheap against peers is not the same as being cheap.
 
 ### Two kinds of debate
@@ -270,7 +270,7 @@ ir-agent/
 - Free sources have no reliable consensus estimates.
 - Some sources (East Money macro pages, numbers extracted from research PDFs) cannot keep the raw API response; the audit lists them separately.
 - The pipeline runs serially: concurrency needs a rate-limiting strategy for East Money first.
-- Apart from PE, relative valuation's inputs (PB's book equity, the EV components, EBITDA, ROE and growth) come from the most recent complete fiscal year rather than the latest quarter; in A-shares, depreciation and amortization are only disclosed in the interim and annual reports.
+- The ledger's `pb` and `ev_ebitda` still use the reporting period while relative valuation uses the latest balance sheet and TTM flows, so section 7's multiple coordinates and section 8's relative valuation run on two different sets of definitions; both the sheet and the report label every line.
 
 ## Documentation
 
