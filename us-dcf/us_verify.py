@@ -379,8 +379,11 @@ def verify(path: str, quiet: bool = False):
     return fails, dv
 
 
-def verify_all_scenarios(path: str, quiet: bool = False):
-    """三档情景全部验算 —— 只验当前情景会让 Bull/Bear 永远没被覆盖过。"""
+def verify_all_scenarios(path: str, quiet: bool = False, values: dict | None = None):
+    """三档情景全部验算 —— 只验当前情景会让 Bull/Bear 永远没被覆盖过。
+
+    values 给定时写入各档每股价值 {"Bull": ps, "Base": ps, "Bear": ps}（与 ashare_verify
+    同名同语义；ir-agent 的足球场图要用）。验算有失败的那一档也照写 —— 由调用方决定取舍。"""
     import shutil, tempfile
     out = []
     wb0 = load_workbook(path); a0 = wb0["1_Assumptions"]
@@ -388,13 +391,15 @@ def verify_all_scenarios(path: str, quiet: bool = False):
     cur = int(a0.cell(sr, 2).value or 2)
     for sc, nm in [(1, "Bull"), (2, "Base"), (3, "Bear")]:
         if sc == cur:
-            f, _ = verify(path, quiet=True)
+            f, dv = verify(path, quiet=True)
         else:
             tmp = os.path.join(tempfile.gettempdir(), f"_sc{sc}_" + os.path.basename(path))
             shutil.copy(path, tmp)
             w = load_workbook(tmp); w["1_Assumptions"].cell(sr, 2).value = sc; w.save(tmp)
-            f, _ = verify(tmp, quiet=True)
+            f, dv = verify(tmp, quiet=True)
             os.remove(tmp)
+        if values is not None and dv and dv.get("ps") is not None:
+            values[nm] = float(dv["ps"])
         out += [(nm,) + x for x in f]
         if not quiet:
             print(f"   {nm}: {'✅' if not f else f'❌ {len(f)} 项'}")
