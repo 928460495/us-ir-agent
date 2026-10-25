@@ -104,3 +104,11 @@ def test_英伟达估值供数_拆股还原且两层对账一致(tmp_path):
     dil = cal["stmts"]["shares"]["摊薄股数"].tolist()
     assert max(dil) / min(dil) < 1.2                       # 拆股已还原：五年股数同一量级
     assert M.reconcile(cal["stmts"] | {"ends": cal["periods"]["annual"]}, r.ledger, TODAY, fye) == []
+
+
+def test_苹果完整估值链_验算三档蒙特卡洛(tmp_path):
+    from ir_agent import dcf, full, pipeline
+    r = pipeline.run("AAPL", 2025, TODAY, snapshot_dir=tmp_path / "snap")
+    res = dcf.run("AAPL", tmp_path / "out", as_of=TODAY, ledger=r.ledger, **full._dcf_kw(r))
+    assert res.verified and set(res.scenario_ps) == {"bear", "base", "bull"}
+    assert res.mc and res.mc["p5"] < res.mc["p50"] < res.mc["p95"]

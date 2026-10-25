@@ -1144,7 +1144,11 @@ def _dcf_sheet(wb, cal, path):
         for i in range(5):
             col = CL(2 + i)
             pv = "+".join(f"${CL(2+t)}${FFr}/(1+$A{r})^({t+1}-0.5*$B${MYr})" for t in range(NY))
-            roic = f"($B${TEr}*(1-$B${TTr})/$B${ICr})"
+            # 终值 ROIC 按「终值 ROIC 处理」开关取生效值，与主模型一致：模式 2 = 本行 WACC + 收敛溢价。
+            # 此前直接用计算值，开关拨到 2（或因此降级）时整张敏感性表与主模型不符（变异测试发现）
+            roic = (f"IF({A}!$B${DR['终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）']}=2,"
+                    f"$A{r}+{A}!$B${DR['终值 ROIC 收敛溢价（模式2 用）']},"
+                    f"($B${TEr}*(1-$B${TTr})/$B${ICr}))")
             rr_ = f"({col}${SHROW}/{roic})"
             nopat = f"($B${TEr}*(1-$B${TTr}))"
             deg = f"OR($B${ICr}<=0,{roic}<=$A{r},{rr_}>=1,{rr_}<0)"
