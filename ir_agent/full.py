@@ -185,6 +185,17 @@ def _us_meta(code: str) -> tuple[str, str]:
     return info.name, str(sub.get("sic") or "")
 
 
+def _dcf_kw(r) -> dict:
+    """估值层的额外参数：美股要已落盘的 companyfacts 快照与财年末（同源供数），A 股不传。"""
+    from ir_agent.market import is_us
+
+    if not is_us(getattr(r, "code", "") or "000000"):
+        return {}
+    m = r.sec_meta or {}
+    return {"us_ctx": {"store": r.store, "companyfacts_sid": m.get("companyfacts_sid"),
+                       "fye": m.get("fye", "")}}
+
+
 def _company_name(code: str) -> str:
     """公司简称。取不到就退回代码 —— 搜索提示词里写代码也能用。"""
     from ir_agent.market import is_us
@@ -2846,7 +2857,7 @@ def _propose_assumptions(code, r, body, md, as_of, out, client, arts,
     from ir_agent import assume, assume_review
 
     try:
-        cal = dcf.calibrate_only(code, as_of=as_of, ledger=r.ledger)
+        cal = dcf.calibrate_only(code, as_of=as_of, ledger=r.ledger, **_dcf_kw(r))
     except dcf.DcfUnavailable as e:
         return f"DCF 判断项（校准失败：{e}）"
 
@@ -3077,7 +3088,7 @@ def run_valuation(code: str, r, as_of: date, out_dir: str | Path,
     # 校准失败时退回 anchor=None（维持未平移路径）：这不是新增的失败
     # 方式，dcf.run 随后同样会遇到 DcfUnavailable，处置口径要一致。
     try:
-        cal = dcf.calibrate_only(code, as_of=as_of, ledger=r.ledger)
+        cal = dcf.calibrate_only(code, as_of=as_of, ledger=r.ledger, **_dcf_kw(r))
         anchor = assume.anchor_from_cal(cal)
     except dcf.DcfUnavailable:
         anchor = None
@@ -3115,7 +3126,7 @@ def run_valuation(code: str, r, as_of: date, out_dir: str | Path,
     stage = Stage.NOT_APPLICABLE
     try:
         print("三表 DCF 建模（ashare-dcf）…", file=sys.stderr)
-        dcf_res = dcf.run(code, out, as_of=as_of, ledger=r.ledger,
+        dcf_res = dcf.run(code, out, as_of=as_of, ledger=r.ledger, **_dcf_kw(r),
                           assumptions=a, approved_by=approved_by)
     except dcf.DcfUnavailable as e:
         skipped.append(f"估值（{e}）")

@@ -539,7 +539,8 @@ class Test研报对WACC的归因必须指向真正参与计算的β:
 
     def test_建模时从工作簿读出所用β(self):
         import inspect
-        assert 'inp["dcf"]["Beta（5年"]' in inspect.getsource(dcf.run)
+        # 键名按前缀取（A 股「Beta（5年…」、us-dcf「Beta（5年对标普500回归+Blume）」），仍读工作簿
+        assert 'inp["dcf"].items() if k.startswith("Beta（5年")' in inspect.getsource(dcf.run)
 
 
 # ── 量级对账：每股价值与现价不能差一个数量级 ──────────────────────
@@ -760,7 +761,7 @@ class Test蒙特卡洛:
         """命令行在验算未通过时直接返回、不跑蒙特卡洛；这里同一顺序。"""
         import inspect
         src = inspect.getsource(dcf.run)
-        assert "import ashare_mc" in src and "_monte_carlo(" in src
+        assert '"us_mc" if us else "ashare_mc"' in src and "_monte_carlo(" in src     # 按市场选引擎
         assert src.index("V.verify(") < src.index("_monte_carlo(")
         assert "if not fails" in src
 

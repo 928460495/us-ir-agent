@@ -103,6 +103,13 @@ def simulate(inp: dict, P: dict) -> dict:
     m_live = np.array(inp["gm"], dtype=float)
     cx_live = np.array(inp["capex"], dtype=float)
     sb_live = np.array(inp["sbc"], dtype=float)
+    # 首年锚定（与 us_verify.recompute、ashare_mc 一致）：已公布季度实际 + 机械外推，不是判断，
+    # 不加随机扰动。此前 us_mc 完全没处理锚定，关掉随机后复现不出确定性模型。
+    IT = inp.get("it")
+    anchored = bool(IT and IT["sw"] == 1 and IT.get("fy_rev"))
+    if anchored:
+        g_live[0] = IT["fy_rev"] / o["基期营业收入"] - 1
+        m_live[0] = 1 - IT["fy_cogs"] / IT["fy_rev"]
 
     # 相关抽样：Cholesky 注入 ρ（增速平移 与 毛利率平移）
     rho = float(np.clip(P["rho"], -0.999, 0.999))
@@ -145,8 +152,12 @@ def simulate(inp: dict, P: dict) -> dict:
     pv = np.zeros(n); fcff1 = None; ebit = None; nwc = nwc_prev
     yr0 = F["增发到账年份序号（1=首个预测年）"]
     for t in range(ny):
-        rev = rev * (1 + g_live[t] + dg + eg[t])
-        cogs = rev * (1 - (m_live[t] + dm + em[t]))
+        if anchored and t == 0:
+            rev = np.full(n, o["基期营业收入"] * (1 + g_live[0]))
+            cogs = rev * (1 - m_live[0])
+        else:
+            rev = rev * (1 + g_live[t] + dg + eg[t])
+            cogs = rev * (1 - (m_live[t] + dm + em[t]))
         ebit = rev - cogs - rev * opex + rev * oth
         dep = ppe * G["折旧率（占期初固定资产净额）"]
         amt = rev * G["无形摊销 / 营收"]

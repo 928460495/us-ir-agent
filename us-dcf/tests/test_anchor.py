@@ -58,3 +58,15 @@ def test_建表后锚定由活公式实现且独立重算一致(tmp_path):
     assert inp["it"]["sw"] == 1 and inp["it"]["fy_rev"] == pytest.approx(it["fy_rev"])
     fails, _ = V.verify(path, quiet=True)
     assert fails == []
+
+
+def test_蒙特卡洛在锚定开启时自检通过_首年不加扰动(tmp_path):
+    # 接入时发现：us_mc 从未处理首年锚定，关掉随机后复现不出确定性模型（124.56 vs 140.28）
+    import us_mc as MC
+    from conftest import load_cal
+    cal = load_cal()
+    path = _build(tmp_path, cal)
+    hist = dict(sd_growth=cal["judg"]["g_stats"][1], sd_margin=cal["judg"]["gm_stats"][1],
+                rho=cal.get("_rho", 0.0), tax_mean=cal["gen"]["tax"], beta_mean=cal["dcf"]["beta"])
+    out = MC.run(path, hist=hist, n=2000, seed=7, quiet=True)
+    assert out["p5"] < out["p50"] < out["p95"]

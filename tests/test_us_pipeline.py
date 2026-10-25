@@ -197,3 +197,18 @@ def test_美股的年报地址是时点内最新10K(fake_all, tmp_path):
 def test_定性层能从快照读到申报清单(fake_all, tmp_path):
     r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
     assert r.store.load(r.sec_meta["submissions_sid"]).payload["fiscalYearEnd"] == "0927"
+
+
+def test_估值层所需的快照与财年末记在sec_meta里(fake_all, tmp_path):
+    r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+    assert r.sec_meta["fye"] == "0927"
+    assert r.store.load(r.sec_meta["companyfacts_sid"]).payload["entityName"] == "Apple Inc."
+
+
+def test_full把美股上下文交给估值层_A股不传(fake_all, tmp_path):
+    from types import SimpleNamespace
+    from ir_agent import full
+    r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+    kw = full._dcf_kw(r)
+    assert kw["us_ctx"]["store"] is r.store and kw["us_ctx"]["fye"] == "0927"
+    assert full._dcf_kw(SimpleNamespace(code="600183")) == {}

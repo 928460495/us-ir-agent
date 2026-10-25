@@ -573,5 +573,6 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
 
     run = _analyze(ticker, year, period_suffix, period, prior_period, as_of, led, store,
                    fin, quote_res, spot, warnings, False, {}, annual_url)
-    run.sec_meta = {"submissions_sid": sec_sids["submissions"]}
+    run.sec_meta = {"submissions_sid": sec_sids["submissions"],
+                    "companyfacts_sid": sec_sids["companyfacts"], "fye": fye}
     return run

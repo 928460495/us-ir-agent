@@ -26,6 +26,7 @@ ashare-dcf 是完整的三表联动模型: 逐科目预测、资产负债表强�
 
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from dataclasses import dataclass, field
@@ -40,6 +41,9 @@ from ir_agent.market import money_unit
 # 可用环境变量覆盖。
 ENV_DIR = "ASHARE_DCF_DIR"
 DEFAULT_DIR = Path(__file__).resolve().parent.parent / "ashare-dcf"
+# 美股引擎 us-dcf（2026-10 并入，金额以百万美元计）。同一流程驱动两个引擎，见 `_load_for`。
+ENV_DIR_US = "US_DCF_DIR"
+DEFAULT_DIR_US = Path(__file__).resolve().parent.parent / "us-dcf"
 
 YI = Decimal("100000000")          # ashare-dcf 以亿元计，账本以元计
 
@@ -231,6 +235,57 @@ def _load(dirpath: Path):
     return D, C, B, V
 
 
+def _load_us(dirpath: Path):
+    if not dirpath.is_dir():
+        raise DcfUnavailable(f"未找到 us-dcf（{dirpath}）。可用环境变量 {ENV_DIR_US} 指定它的位置。")
+    if str(dirpath) not in sys.path:
+        sys.path.insert(0, str(dirpath))
+    try:
+        import us_build as B
+        import us_calibrate as C
+        import us_data as D
+        import us_verify as V
+    except ImportError as e:
+        raise DcfUnavailable(f"us-dcf 无法导入：{e}") from e
+    return D, C, B, V
+
+
+def _load_for(code: str, dirpath: Path | None = None):
+    """按代码选引擎：6 位数字 → ashare-dcf，其余 → us-dcf。两者交出同名同语义的四个模块。"""
+    from ir_agent.market import is_us
+
+    if is_us(code):
+        return _load_us(dirpath or Path(os.environ.get(ENV_DIR_US) or DEFAULT_DIR_US))
+    return _load(dirpath or Path(os.environ.get(ENV_DIR) or DEFAULT_DIR))
+
+
+def _calibrate_us(D, C, code: str, as_of: date, ledger, years: int, us_ctx: dict):
+    """美股校准：同一份 companyfacts 快照（按分析时点过滤）+ ir-agent 供给的行情，交给 us-dcf。
+
+    返回 (cal, notes, stmts)。stmts 不为 None —— 账本与估值层同源，不需要事后 cross_check；
+    两层选标签规则不同带来的差异由 `dcf_data_us.reconcile` 逐年对账、写进 notes。
+    """
+    from ir_agent import dcf_data_us as M
+
+    store = us_ctx["store"]
+    doc = store.load(us_ctx["companyfacts_sid"]).payload
+    shares = next((f for f in sorted((f for (k, _p), fs in ledger._facts.items()      # noqa: SLF001
+                                      if k == "shares_outstanding" for f in fs if f.as_of <= as_of),
+                                     key=lambda f: f.as_of, reverse=True)), None)
+    try:
+        mi = M.market_inputs(code, as_of, store, ledger)
+        cal = C.calibrate(code, years, facts=M.pit_us_gaap(doc, as_of),
+                          shares=float(shares.value) / 1e6 if shares is not None else None,
+                          splits=mi["splits"], quote=mi["quote"], px=mi["px"], mkt=mi["mkt"])
+    except getattr(D, "DataError", Exception) as e:
+        raise DcfUnavailable(f"{code} 无法建模：{e}") from e
+    notes = ["报表由同一份 companyfacts 快照供数（按分析时点过滤，与分析层同源）；"
+             "行情：现价取账本，日线与拆股取 Tiingo，标普 500 取 FRED"]
+    notes += ["⚠ " + w for w in M.reconcile(cal["stmts"] | {"ends": cal["periods"]["annual"]},
+                                             ledger, as_of, us_ctx["fye"])]
+    return cal, notes, cal["stmts"]
+
+
 def _asof_note(as_of: date) -> list[str]:
     """as_of 与今天不一致时必须说出来 —— 否则就是个不报错的未来函数。"""
     today = date.today()
@@ -406,10 +461,13 @@ def _calibrate(D, C, code: str, as_of: date, ledger, years: int):
 
 
 def calibrate_only(code: str, *, as_of: date, ledger=None, years: int = 5,
-                   dirpath: Path | None = None) -> dict:
+                   dirpath: Path | None = None, us_ctx: dict | None = None) -> dict:
     """只校准不建模 —— 第一阶段用它拿到历史参照与预测期标签。"""
-    dirpath = dirpath or Path(os.environ.get(ENV_DIR) or DEFAULT_DIR)
-    D, C, _, _ = _load(dirpath)
+    from ir_agent.market import is_us
+
+    D, C, _, _ = _load_for(code, dirpath)
+    if is_us(code):
+        return _calibrate_us(D, C, code, as_of, ledger, years, us_ctx or {})[0]
     return _calibrate(D, C, code, as_of, ledger, years)[0]
 
 
@@ -447,7 +505,8 @@ def _effective_first_year(inp: dict) -> tuple[float, float] | None:
     if not it or not float(it.get("sw") or 0):
         return None
     fy_rev = float(it.get("fy_rev") or 0)
-    base_rev = float((inp.get("o") or {}).get("基期营业总收入") or 0)
+    o = inp.get("o") or {}
+    base_rev = float(o.get("基期营业总收入") or o.get("基期营业收入") or 0)    # A 股 / us-dcf 的键名
     if not fy_rev or it.get("fy_cogs") is None or not base_rev:
         return None
     return anchored_year1(fy_rev=fy_rev, fy_cogs=float(it["fy_cogs"]), base_rev=base_rev)
@@ -540,7 +599,7 @@ def _readback_check(judg: dict, inp: dict, tol: float = 1e-9) -> list[str]:
 def run(code: str, out_dir: str | Path, *, as_of: date,
         ledger: FactLedger | None = None, years: int = 5,
         dirpath: Path | None = None, assumptions=None,
-        approved_by: str = "") -> DcfResult:
+        approved_by: str = "", us_ctx: dict | None = None) -> DcfResult:
     """跑一遍 ashare-dcf，返回结果与全部警告。
 
     **账本给定时由它供数**，DCF 不再自行取数 —— 分析层与估值层用同一套
@@ -550,10 +609,12 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
     **不吞掉任何警告。** ashare-dcf 自己会报健全性问题（终值占比过高、
     再投资率失真、科目被抽干等），那些是它最有价值的部分之一。
     """
-    dirpath = dirpath or Path(os.environ.get(ENV_DIR) or DEFAULT_DIR)
-    D, C, B, V = _load(dirpath)
+    from ir_agent.market import is_us
 
-    cal, notes, stmts = _calibrate(D, C, code, as_of, ledger, years)
+    us = is_us(code)
+    D, C, B, V = _load_for(code, dirpath)
+    cal, notes, stmts = (_calibrate_us(D, C, code, as_of, ledger, years, us_ctx or {}) if us
+                         else _calibrate(D, C, code, as_of, ledger, years))
 
     if assumptions is not None:
         from ir_agent import assume
@@ -593,8 +654,10 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
 
     inp = V.read_inputs(str(wb))
     rows, _ = V.recompute(inp)
-    warns = (V.sanity(dv, rows) + V.balance_sheet_warnings(inp, rows)
-             + V.assumption_warnings(inp))
+    # us-dcf 没有后两项检查（资产负债表与假设合理性的告警由它的 sanity 一并给出）
+    warns = (V.sanity(dv, rows)
+             + (V.balance_sheet_warnings(inp, rows) if hasattr(V, "balance_sheet_warnings") else [])
+             + (V.assumption_warnings(inp) if hasattr(V, "assumption_warnings") else []))
     if assumptions is not None:
         # 见 `_readback_check`：人批准的数必须真的进了工作簿。**排在所有
         # 健全性告警前面** —— 数要是根本没进去，后面那些告警都是在给一个
@@ -605,7 +668,7 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
     mc: dict = {}
     if not fails:
         try:
-            import ashare_mc as MC
+            MC = importlib.import_module("us_mc" if us else "ashare_mc")
         except ImportError as e:
             warns = list(warns) + [_mc_skipped(e)]
         else:
@@ -614,7 +677,7 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
     else:
         warns = list(warns) + ["公式引擎验算未通过，蒙特卡洛未运行"]
 
-    ev0 = Decimal(str(dv["ev0"]))
+    ev0 = Decimal(str(dv["ev0"] if "ev0" in dv else dv["ev"]))         # us-dcf 叫 ev
     res = DcfResult(
         code=code, workbook=str(wb),
         price=Decimal(str(meta["price"])),
@@ -626,7 +689,7 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
         verified=not fails,
         as_of=as_of,
         anchor_note=(_anchor_note(cal["judg"], inp) if assumptions is not None else ""),
-        beta=Decimal(str(inp["dcf"]["Beta（5年"])),
+        beta=Decimal(str(next(v for k, v in inp["dcf"].items() if k.startswith("Beta（5年")))),
         mc=mc,
         scenario_ps=scenario_ps,
         warnings=[str(w) for w in warns],
@@ -644,7 +707,7 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
     if not res.verified:
         res.warnings.insert(0, f"公式引擎验算失败 {len(fails)} 处，"
                                "本结果不可采信")
-    if ledger is not None and stmts is None:
+    if ledger is not None and stmts is None and not us:      # 美股两层同源，差异已由 reconcile 对账
         # 只在**退回自行取数**时才需要事后比对。账本供数时两边同源，
         # 比对必然一致，跑它只是浪费 —— 真正的验证在 dcf_data 的映射
         # 核验里（账本铺的表 vs 原生接口，逐格比对）。
