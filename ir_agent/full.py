@@ -143,18 +143,24 @@ def _load_external(code: str, r, as_of: date) -> tuple[str, str, str]:
 
 
 def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
-    """美股的外部资料：FMP 一致预期入账（不取研报 —— 免费渠道没有卖方研报正文）。"""
+    """美股的外部资料：FMP 一致预期入账 + FOMC 政策声明入语料库（OFFICIAL）。
+
+    不取研报 —— 免费渠道没有卖方研报正文。语料库**每次重建**，与 A 股 `_load_external`
+    同一语义：本函数两个阶段都跑，8-K、纪要、开放网页随后追加或读回。
+    """
     from ir_agent import corpus as C
-    from ir_agent.sources import fmp
+    from ir_agent.sources import fmp, fomc
     from ir_agent.sources.external import Corpus
     from ir_agent.sources.reports import consensus_facts
 
-    if r.corpus is None:
-        r.corpus = Corpus(as_of=as_of)
+    r.corpus = Corpus(as_of=as_of)
+    statements, fomc_err = fomc.fetch_statements(as_of, r.store)
+    for d in statements:
+        r.corpus.add_if_visible(d)
     fye = r.store.load(r.sec_meta["submissions_sid"]).payload.get("fiscalYearEnd") or ""
     cs = fmp.fetch_consensus(code, fye, as_of, r.store) if len(fye) == 4 else None
     r.consensus = cs
-    notes: list[str] = []
+    notes: list[str] = [fomc_err] if fomc_err else []
     if cs is None:
         notes.append("一致预期不可用（FMP 免费档范围外、或分析时点早于今天而拿不到当时的预期）")
     else:

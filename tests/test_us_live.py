@@ -59,3 +59,9 @@ def test_苹果一致预期至少两个财年_CAT不可用(store):
     c = fmp.fetch_consensus("AAPL", "0927", TODAY, store)
     assert c is not None and len(c.eps) >= 2 and all(e.n >= 2 for e in c.eps.values())
     assert fmp.fetch_consensus("CAT", "1231", TODAY, store) is None
+
+
+def test_FOMC最近一份声明(store):
+    from ir_agent.sources import fomc
+    docs, err = fomc.fetch_statements(TODAY, store, n=1)
+    assert err == "" and "Committee" in docs[0].text

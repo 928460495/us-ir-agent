@@ -80,6 +80,12 @@ def test_A股一致预期措辞不变():
     assert "EPS 中位" in C.consensus_prompt(c) and "篇研报" in C.consensus_md(c)
 
 
+@pytest.fixture(autouse=True)
+def _no_fomc(monkeypatch):
+    from ir_agent.sources import fomc
+    monkeypatch.setattr(fomc, "fetch_statements", lambda as_of, store: ([], ""))
+
+
 def _run(tmp_path, code="AAPL"):
     from datetime import datetime
     from types import SimpleNamespace
