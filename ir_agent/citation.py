@@ -50,12 +50,12 @@ def format_value(fact: Fact) -> str:
         return f"{v * 100:.2f}%"
     if fact.unit == "%":
         return f"{v:.2f}%"
-    if fact.unit == "元":
+    if fact.unit in ("元", "美元", "股"):        # 金额（人民币 / 美元）与股数共用亿、万两档
         if abs(v) >= _YI:
-            return f"{v / _YI:.2f} 亿元"
+            return f"{v / _YI:.2f} 亿{fact.unit}"
         if abs(v) >= _WAN:
-            return f"{v / _WAN:.2f} 万元"
-        return f"{v:.2f} 元"
+            return f"{v / _WAN:.2f} 万{fact.unit}"
+        return f"{v:.2f} {fact.unit}"
     if fact.unit == "x":
         return f"{v:.2f}x"
     if fact.unit == "分位":

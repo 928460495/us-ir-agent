@@ -34,6 +34,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from ir_agent.ledger import Fact, FactLedger, LookAheadError, Method
+from ir_agent.market import money_unit
 
 # ashare-dcf 的位置。默认取本仓库内的 ashare-dcf/（2026-10 并入，此前是同级目录），
 # 可用环境变量覆盖。
@@ -304,9 +305,10 @@ def to_facts(res: DcfResult, as_of: date,
         return Fact(key=key, value=value, unit=unit, period=as_of.isoformat(),
                     as_of=as_of, source_id=source_id, method=Method.COMPUTED)
 
+    money = money_unit(res.code)
     out = [
-        f("valuation.value_per_share", res.value_per_share, "元"),
-        f("valuation.price", res.price, "元"),
+        f("valuation.value_per_share", res.value_per_share, money),
+        f("valuation.price", res.price, money),
         f("valuation.wacc", res.wacc, "ratio"),
         f("valuation.terminal_roic", res.terminal_roic, "ratio"),
         f("valuation.reinvest_rate", res.reinvest_rate, "ratio"),
@@ -316,7 +318,7 @@ def to_facts(res: DcfResult, as_of: date,
         # 归因到了一个根本没参与计算的数上。
         f("valuation.beta", res.beta, "x"),
     ]
-    out += [f(f"valuation.dcf_{k}", res.scenario_ps[k], "元")
+    out += [f(f"valuation.dcf_{k}", res.scenario_ps[k], money)
             for k in ("bear", "base", "bull") if k in res.scenario_ps]
     # 蒙特卡洛：键都以 `valuation.` 开头 —— 辩论裁判的可引用清单按这个前缀收
     # （`full._catalog_periods` 的 PROMPT_SIDE），换前缀就会被判成伪造、回写删光。
@@ -325,12 +327,12 @@ def to_facts(res: DcfResult, as_of: date,
         # 单位整体是「条路径」：摘要里占位符后不跟名词，模型就没处补空格
         #（生益科技试跑曾渲染成「50000 条 路径」）。
         out += [f("valuation.mc_paths", m["n"], "条路径"),
-                f("valuation.mc_p5", m["p5"], "元"),
-                f("valuation.mc_p50", m["p50"], "元"),
-                f("valuation.mc_p95", m["p95"], "元"),
-                f("valuation.mc_mean", m["mean"], "元"),
+                f("valuation.mc_p5", m["p5"], money),
+                f("valuation.mc_p50", m["p50"], money),
+                f("valuation.mc_p95", m["p95"], money),
+                f("valuation.mc_mean", m["mean"], money),
                 f("valuation.mc_p_above", m["p_above"], "ratio")]
-        out += [f(f"valuation.mc_swing_{i}", s, "元")
+        out += [f(f"valuation.mc_swing_{i}", s, money)
                 for i, (_, s) in enumerate(m.get("tornado") or [], 1)]
     return out
 

@@ -18,6 +18,7 @@ from decimal import Decimal
 import numpy as np
 
 from ir_agent.industry_profile import _median, _quartiles
+from ir_agent.market import money_unit
 
 KINDS = ("pe", "pb", "ev_ebitda")
 LABEL = {"pe": "PE(TTM)", "pb": "PB", "ev_ebitda": "EV/EBITDA"}
@@ -352,12 +353,13 @@ def to_facts(res: RelvalResult, as_of: date,
         return Fact(key=key, value=value, unit=unit, period=as_of.isoformat(),
                     as_of=as_of, source_id=source_id, method=Method.COMPUTED)
 
+    money = money_unit(res.target.code)
     out = []
     for kind, b in res.comps.items():
         if b is None:
             continue
         k = f"valuation.rel_{kind}"
-        out += [f(f"{k}_lo", b.lo, "元"), f(f"{k}_mid", b.mid, "元"), f(f"{k}_hi", b.hi, "元"),
+        out += [f(f"{k}_lo", b.lo, money), f(f"{k}_mid", b.mid, money), f(f"{k}_hi", b.hi, money),
                 f(f"{k}_mult_lo", b.mult_lo, "x"), f(f"{k}_mult_mid", b.mult_mid, "x"),
                 f(f"{k}_mult_hi", b.mult_hi, "x")]
     for kind, r in res.regs.items():
@@ -369,8 +371,8 @@ def to_facts(res: RelvalResult, as_of: date,
                     f(f"{k}_r2", Decimal(str(r.r2)), "ratio"),
                     f(f"{k}_n", Decimal(r.n), "家")]
         if r.usable:
-            out += [f(f"{k}_fit", r.fit, "元"), f(f"{k}_lo", r.lo, "元"),
-                    f(f"{k}_hi", r.hi, "元"),
+            out += [f(f"{k}_fit", r.fit, money), f(f"{k}_lo", r.lo, money),
+                    f(f"{k}_hi", r.hi, money),
                     f(f"{k}_mult", Decimal(str(r.fit_mult)), "x")]
     return out
 

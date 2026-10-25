@@ -32,6 +32,17 @@ def market_of(code: str) -> str:
     raise UnsupportedMarket(f"无法识别代码 {code} 所属交易所。")
 
 
+def is_us(code: str) -> bool:
+    """美股版过渡期的分流：6 位数字是 A 股代码，其余按美股代码处理。"""
+    c = code.strip()
+    return not (len(c) == 6 and c.isdigit())
+
+
+def money_unit(code: str) -> str:
+    """金额事实的单位：A 股「元」，美股「美元」。"""
+    return "美元" if is_us(code) else "元"
+
+
 def quote_symbol(code: str) -> str:
     """行情接口用的小写前缀符号，如 sh600519。"""
     return market_of(code).lower() + code
