@@ -50,6 +50,9 @@ US_MACRO: tuple[UsSeries, ...] = (
     # FRED 的 GDP 以十亿美元计（季调年化）
     UsSeries("macro.gdp_nominal", "GDP", "level", "Q", COINCIDENT, "美元", Decimal(10) ** 9),
     UsSeries("macro.unemployment", "UNRATE", "pct", "M", LAGGING),
+    # 周期框架的利润与库存维度（A 股取不到）：企业税后利润（季度）、全行业库存销售比
+    UsSeries("macro.corporate_profits_yoy", "CP", "yoy", "Q", COINCIDENT),
+    UsSeries("macro.inventory_sales_ratio", "ISRATIO", "level", "M", LAGGING, "x"),
     UsSeries("macro.industrial_production_yoy", "INDPRO", "yoy", "M", COINCIDENT),
     UsSeries("macro.retail_sales_yoy", "RSAFS", "yoy", "M", COINCIDENT),
     UsSeries("macro.initial_claims", "ICSA", "level", "D", LEADING, "人"),
@@ -161,6 +164,8 @@ class UsMacroSnapshot(MacroSnapshot):
               ("macro.industrial_production_yoy", "工业产出同比"),
               ("macro.retail_sales_yoy", "零售销售同比"),
               ("macro.ppi_yoy", "PPI 同比"),
+              ("macro.corporate_profits_yoy", "企业税后利润同比"),
+              ("macro.inventory_sales_ratio", "库存销售比"),
               ("macro.unemployment", "失业率"),
               ("macro.cpi_yoy", "CPI 同比"))
     _classify = staticmethod(classify)

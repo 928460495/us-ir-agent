@@ -719,9 +719,10 @@ def _load_value_chain(r, as_of: date, client, *, out: Path | None = None,
 def _load_cycle(r, as_of: date) -> tuple[str, str, str]:
     """商业周期定位。必须在宏观与利率都入账之后调用。"""
     from ir_agent import cycle
+    from ir_agent.market import is_us
 
     try:
-        view = cycle.assess(r.ledger, as_of)
+        view = cycle.assess(r.ledger, as_of, us=is_us(getattr(r, "code", "") or "000000"))
     except Exception as e:                                  # noqa: BLE001
         return "", "", f"周期定位（{e.__class__.__name__}: {e}）"
     if not view.scores:

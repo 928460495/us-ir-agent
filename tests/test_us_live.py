@@ -65,3 +65,13 @@ def test_FOMC最近一份声明(store):
     from ir_agent.sources import fomc
     docs, err = fomc.fetch_statements(TODAY, store, n=1)
     assert err == "" and "Committee" in docs[0].text
+
+
+def test_FRED企业利润与库存销售比(store):
+    from ir_agent.sources import fred
+    if not os.environ.get("FRED_API_KEY"):
+        pytest.skip("未设置 FRED_API_KEY")
+    cp = fred.fetch_series_asof("CP", TODAY, store)
+    isr = fred.fetch_series_asof("ISRATIO", TODAY, store)
+    assert any(f.key == "macro.corporate_profits_yoy" for f in cp)
+    assert all(1 < f.value < 2 for f in isr if f.key == "macro.inventory_sales_ratio")

@@ -80,6 +80,8 @@ class Signal:
     direction: Direction
     detail: str
     detail_ref: str = ""
+    # 「高 / 低」的分界。None 用 A 股的 _THRESHOLD；美股指标口径不同，信号自带
+    threshold: Decimal | None = None
 
     def describe(self) -> str:
         return f"{self.dimension} {self.detail}，{self.direction.value}"
@@ -278,7 +280,8 @@ def _score(sig: Signal, want: tuple[str | None, Direction | None]) -> Decimal:
     total = Decimal(0)
     if want_level is not None:
         total += 1
-        high = sig.level >= _THRESHOLD[sig.dimension]
+        cut = sig.threshold if sig.threshold is not None else _THRESHOLD[sig.dimension]
+        high = sig.level >= cut
         if (want_level == "高") == high:
             got += 1
     if want_dir is not None:
@@ -372,11 +375,12 @@ class CycleView:
         return "\n".join(lines)
 
 
-def assess(ledger: FactLedger, as_of: date) -> CycleView:
+def assess(ledger: FactLedger, as_of: date, us: bool = False) -> CycleView:
     """对四个阶段各打一个匹配分，取最高。**不用状态机** ——
-    课程明确说阶段可能被跳过或回退。"""
-    signals = [s for fn in DIMENSIONS if (s := fn(ledger, as_of)) is not None]
-    extra = [s for fn in COMPLEMENTARY if (s := fn(ledger, as_of)) is not None]
+    课程明确说阶段可能被跳过或回退。`us=True` 用美国指标（见 US_DIMENSIONS）。"""
+    dims, comp = (US_DIMENSIONS, US_COMPLEMENTARY) if us else (DIMENSIONS, COMPLEMENTARY)
+    signals = [s for fn in dims if (s := fn(ledger, as_of)) is not None]
+    extra = [s for fn in comp if (s := fn(ledger, as_of)) is not None]
     if not signals:
         return CycleView(signals=[], scores={}, as_of=as_of, complementary=extra)
 
@@ -386,13 +390,69 @@ def assess(ledger: FactLedger, as_of: date) -> CycleView:
                  if s.dimension in profile]
         scores[phase] = sum(parts) / len(parts) if parts else Decimal(0)
     # 打分维度不足三个时，阶段判定实质上是在猜 —— 记进缺失说明
-    missing = list(MISSING_DIMENSIONS)
-    if len(signals) < len(DIMENSIONS):
+    missing = list(US_MISSING_DIMENSIONS if us else MISSING_DIMENSIONS)
+    if len(signals) < len(dims):
         got = {s.dimension for s in signals}
         missing += [f"{d}（数据缺失）" for d in ("活动", "信贷", "政策")
                     if d not in got]
     return CycleView(signals=signals, scores=scores, as_of=as_of,
                      complementary=extra, missing=missing)
+
+
+# ── 美股：指标换成 FRED ──────────────────────────────────────────
+# ISM PMI 是付费数据，活动维度改用工业产出同比（同步指标，以 0 为扩张 / 收缩分界）。
+# 信贷维度用高收益债利差**取负**：利差收窄 = 信用扩张，方向与 A 股 M1−M2 剪刀差一致；
+# 分界 5% 约为 1997 年以来 ICE BofA 美国高收益债利差的中位数。
+# 政策维度用 10 年减 2 年期限利差，分界与 A 股同为 0.5 个百分点。
+US_HY_NEUTRAL = Decimal("0.05")
+
+
+def _signal(ledger, as_of, key, dimension, *, negate=False, threshold=None, flat=Decimal("0.003"),
+            text=lambda v: "", label="") -> Signal | None:
+    ser = _series(ledger, key, as_of)
+    if not ser:
+        return None
+    per = ser[-1][0]
+    vals = [(-v if negate else v) for _, v in ser]
+    raw = ser[-1][1]
+    return Signal(dimension, vals[-1], _direction(vals, flat=flat), f"{label} {text(raw)}",
+                  f"{label} [[{key}@{per}]]", threshold=threshold)
+
+
+def activity_us(ledger: FactLedger, as_of: date) -> Signal | None:
+    return _signal(ledger, as_of, "macro.industrial_production_yoy", "活动",
+                   threshold=Decimal(0), label="工业产出同比", text=lambda v: f"{v * 100:+.2f}%")
+
+
+def credit_us(ledger: FactLedger, as_of: date) -> Signal | None:
+    return _signal(ledger, as_of, "macro.hy_spread", "信贷", negate=True,
+                   threshold=-US_HY_NEUTRAL, flat=Decimal("0.002"),
+                   label="高收益债利差（收窄为信用扩张）", text=lambda v: f"{v * 100:.2f}%")
+
+
+def policy_us(ledger: FactLedger, as_of: date) -> Signal | None:
+    return _signal(ledger, as_of, "macro.term_spread", "政策", threshold=FLAT_SPREAD,
+                   flat=Decimal("0.0005"), label="期限利差（十年减两年）",
+                   text=lambda v: f"{v * 100:.2f}pp")
+
+
+def profits_us(ledger: FactLedger, as_of: date) -> Signal | None:
+    return _signal(ledger, as_of, "macro.corporate_profits_yoy", "利润",
+                   threshold=Decimal(0), label="企业税后利润同比", text=lambda v: f"{v * 100:+.2f}%")
+
+
+def inventories_us(ledger: FactLedger, as_of: date) -> Signal | None:
+    return _signal(ledger, as_of, "macro.inventory_sales_ratio", "库存与销售",
+                   flat=Decimal("0.01"), label="库存销售比（上升为库存积压）",
+                   text=lambda v: f"{v:.2f}")
+
+
+US_DIMENSIONS = (activity_us, credit_us, policy_us)
+US_COMPLEMENTARY = (inflation, profits_us, inventories_us)
+US_MISSING_DIMENSIONS = (
+    "利润、库存与销售两维美股取得到，作补充呈现，未参与阶段打分（Fidelity 画像中这两维"
+    "的阶段期望未逐格标定）",
+)
 
 
 def cycle_facts(view: CycleView, period: str) -> list[Fact]:
