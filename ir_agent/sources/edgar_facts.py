@@ -46,7 +46,8 @@ _DURATION: dict[str, tuple[str, ...]] = {
     "income_tax": ("IncomeTaxExpenseBenefit",),
     "net_profit": ("ProfitLoss", "NetIncomeLoss"),
     "minority_interest_profit": ("NetIncomeLossAttributableToNoncontrollingInterest",),
-    "net_profit_attr_parent": ("NetIncomeLoss",),
+    # CAT 的 10-K 不报 NetIncomeLoss，只报「普通股股东可得净利润」（无优先股时与归母相等）
+    "net_profit_attr_parent": ("NetIncomeLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"),
     "cf_operating": ("NetCashProvidedByUsedInOperatingActivities",
                      "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"),
     "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets",
@@ -150,11 +151,14 @@ def _pick(gaap: dict, key: str, tags: tuple[str, ...], unit: str, duration: bool
 
 
 def _facts(key: str, rows: list[_Row], source_id: str, money: bool) -> list[Fact]:
-    seen, out = set(), []
-    for period, filed, val, _tag in rows:
-        if (period, filed, val) in seen:
+    """同一期按申报日排序，只在数值变化时记新版本。后续申报把比较期原值再报一遍不是新信息 ——
+    记成新版本会让依赖它的计算值带上晚得多的披露日（联网验收：苹果 ROE 显示 2026-07-31）。"""
+    last: dict[str, Decimal] = {}
+    out = []
+    for period, filed, val, _tag in sorted(rows, key=lambda r: (r[0], r[1])):
+        if last.get(period) == val:
             continue
-        seen.add((period, filed, val))
+        last[period] = val
         out.append(Fact(key=key, value=val, period=period, as_of=filed, source_id=source_id,
                         method=Method.REPORTED,
                         unit=MONEY_UNIT if money else SHARE_UNIT,

@@ -82,9 +82,10 @@ def test_取当时可见的初值而非修订值(fake_fred, store):
     assert get(late, "macro.gdp_real_yoy").value == D("0.031")
 
 
-def test_请求窗口从最早到as_of(fake_fred, store):
+def test_版本窗口与观测窗口同起点_止于as_of(fake_fred, store):
+    # 从 1776 年开窗时日度序列有五千多个版本，超过 FRED 单次两千个的上限（联网验收：DGS10 HTTP 400）
     fred.fetch_series_asof("GDPC1", date(2025, 2, 1), store)
-    assert fake_fred[0]["realtime_start"] == fred.REALTIME_EARLIEST
+    assert fake_fred[0]["realtime_start"] == fake_fred[0]["observation_start"]
     assert fake_fred[0]["realtime_end"] == "2025-02-01"
 
 

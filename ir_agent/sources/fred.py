@@ -1,6 +1,6 @@
 """美国宏观与利率：FRED / ALFRED。
 
-**时点**：请求的版本窗口是 `[FRED 最早日期, as_of]`（ALFRED），每个观测日期取 `realtime_end ==
+**时点**：请求的版本窗口是 `[观测窗口起点, as_of]`（ALFRED），每个观测日期取 `realtime_end ==
 as_of` 的那一版 —— 即 as_of 当天仍然有效的版本：GDP 初值，而不是三个月后的修订值。该版本的
 `realtime_start` 就是它开始可见的日期，作为事实的 as_of。
 
@@ -28,8 +28,7 @@ from ir_agent.sources.macro import (COINCIDENT, LAGGING, LEADING, MacroSnapshot,
 
 URL = "https://api.stlouisfed.org/fred/series/observations"
 TIMEOUT = 20
-HISTORY = timedelta(days=366 * 6)            # 取六年：够算同比与近几年趋势
-REALTIME_EARLIEST = "1776-07-04"             # FRED 的版本日期下限
+HISTORY = timedelta(days=366 * 6)            # 取六年：够算同比与近几年趋势；日度约 1560 个版本，低于 FRED 单次两千个的上限
 
 
 @dataclass(frozen=True)
@@ -84,9 +83,12 @@ def _period(d: date, freq: str) -> str:
 
 
 def _observations(series_id: str, as_of: date, store) -> tuple[list[dict], str]:
+    start = (as_of - HISTORY).isoformat()
+    # 版本窗口与观测窗口同起点：观测日期不早于该起点的数值不可能在起点之前公布，
+    # 截断不改变任何返回观测的真实生效日；从 1776 年开窗则日度序列超出版本数上限。
     public = {"series_id": series_id, "file_type": "json",
-              "realtime_start": REALTIME_EARLIEST, "realtime_end": as_of.isoformat(),
-              "observation_start": (as_of - HISTORY).isoformat()}
+              "realtime_start": start, "realtime_end": as_of.isoformat(),
+              "observation_start": start}
     try:
         r = requests.get(URL, params={**public, "api_key": _key()}, timeout=TIMEOUT)
     except requests.RequestException as e:       # 异常文本可能带 key，不透传

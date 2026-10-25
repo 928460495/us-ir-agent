@@ -40,10 +40,11 @@ def test_比较期按起止日期标注而非申报财年():
     assert {"2024FY", "2025FY", "2025Q1", "2025H1"} == periods     # 单季 Q2 三个月不入账
 
 
-def test_比较期在后一年申报里是新版本():
+def test_比较期在后一年申报里原值重报_只保留首次披露():
+    # 2025 年 10-K 把 2024FY 营收作为比较期原值重报：不是新版本，as_of 仍是首次申报日
     fs = parse_companyfacts(AAPL, "0927", "sid")
     vs = sorted(f.as_of for f in fs if f.key == "revenue" and f.period == "2024FY")
-    assert vs == [date(2024, 11, 1), date(2025, 10, 31)]
+    assert vs == [date(2024, 11, 1)]
 
 
 def test_披露日取filed():
@@ -192,3 +193,20 @@ def test_主标签不是首选标签时留说明():
     notes = []
     parse_companyfacts(d, "1231", "sid", notes=notes)
     assert any("revenue" in n and "Revenues" in n and "首选" in n for n in notes)
+
+
+def test_归母净利润退到普通股股东可得净利润():
+    # CAT 的 10-K 不报 NetIncomeLoss（联网验收发现）
+    d = doc({"NetIncomeLossAvailableToCommonStockholdersBasic": [_x("2025-01-01", "2025-12-31", 88, "2026-02-13")]})
+    fs = parse_companyfacts(d, "1231", "sid")
+    assert get(fs, "net_profit_attr_parent", "2025FY").value == D(88)
+
+
+def test_比较期原值重报不算新版本():
+    # 后续 10-Q 把上年末资产负债表作为比较期再报一遍、数值未变：不是新信息（联网验收发现）
+    d = doc({"Assets": [_x(None, "2025-09-27", 359, "2025-10-31"),
+                        _x(None, "2025-09-27", 359, "2026-01-30", form="10-Q", fp="Q1"),
+                        _x(None, "2025-09-27", 360, "2026-05-01", form="10-Q", fp="Q2")]})
+    fs = [f for f in parse_companyfacts(d, "0927", "sid") if f.key == "total_assets"]
+    assert [(f.as_of, f.value) for f in sorted(fs, key=lambda f: f.as_of)] == [
+        (date(2025, 10, 31), D(359)), (date(2026, 5, 1), D(360))]

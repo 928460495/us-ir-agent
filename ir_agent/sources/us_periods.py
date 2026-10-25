@@ -19,7 +19,10 @@ import calendar
 from datetime import date
 
 TOLERANCE_DAYS = 16                         # 52/53 周财年截止日的漂移
-_QUARTER_DAYS = 365.25 / 4
+# 自财年起点累计的天数 → 第几季（含）。区间放宽到能容纳零售业的 12/12/12/16 周季度
+# （Costco 前三季累计 252 天，按「九个月 ± 16 天」会被丢掉 —— 联网验收发现）。
+# 区间互不重叠；单季三个月的数据靠「起点须贴着财年起点」排除，不靠长度。
+_RANGES = ((1, 70, 110), (2, 155, 200), (3, 235, 290), (4, 350, 380))
 _LABELS = {1: "Q1", 2: "H1", 3: "Q1-Q3", 4: "FY"}
 
 
@@ -49,11 +52,8 @@ def fiscal_year(end: date, fye_mmdd: str) -> int:
 
 
 def _quarters(days: int) -> int | None:
-    """天数 → 1–4 个季度；偏离超过容差返回 None。"""
-    q = round(days / _QUARTER_DAYS)
-    if 1 <= q <= 4 and abs(days - q * _QUARTER_DAYS) <= TOLERANCE_DAYS:
-        return q
-    return None
+    """自财年起点累计的天数 → 1–4 个季度；不在任何区间返回 None。"""
+    return next((q for q, lo, hi in _RANGES if lo <= days <= hi), None)
 
 
 def fiscal_label(start: date | None, end: date, fye_mmdd: str) -> str | None:

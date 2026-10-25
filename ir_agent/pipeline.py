@@ -473,13 +473,25 @@ def _analyze(code: str, year: int, period_suffix: str, period: str, prior_period
                        annual_url=annual_url)
 
 
-def _latest_shares(led: FactLedger, as_of: date) -> Fact | None:
-    """时点内可见的最新一期在外股数（封面数）。"""
-    from ir_agent.periods import sort_key
+SHARES_MAX_AGE_DAYS = 400      # 封面股数每份 10-Q / 10-K 都报；超过一年没更新就不可信
 
+
+def _latest_shares(led: FactLedger, as_of: date) -> tuple[Fact | None, str]:
+    """时点内可见的最新一期在外股数（封面数），以及取不到时的原因。
+
+    联网验收: BRK-B 最新一条封面股数是 2011 年的、GOOGL 一条都没有 —— 多类股公司按类别
+    申报，companyfacts 不含分维度事实。拿陈旧股数乘今天的股价会静默算错市值，宁可不算。
+    """
     seen = [f for (k, _p), fs in led._facts.items() if k == "shares_outstanding"  # noqa: SLF001
             for f in fs if f.as_of <= as_of]
-    return max(seen, key=lambda f: (sort_key(f.period), f.as_of), default=None)
+    if not seen:
+        return None, ("EDGAR 无封面在外股数（多类股公司按类别申报时 companyfacts 不含该数），"
+                      "不计算市值。")
+    f = max(seen, key=lambda f: f.as_of)
+    if (as_of - f.as_of).days > SHARES_MAX_AGE_DAYS:
+        return None, (f"EDGAR 封面在外股数最新一条申报于 {f.as_of.isoformat()}，已超过一年"
+                      "（多见于多类股公司），不计算市值。")
+    return f, ""
 
 
 def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
@@ -515,12 +527,16 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
             f"EDGAR 中没有 {ticker} 在 {as_of.isoformat()} 之前申报的 {period} 数据"
             f"（财年末 {fye}）。拒绝用抓取日代替披露日。")
     if tag_notes:
-        warnings.append(f"XBRL 跨标签补缺 {len(tag_notes)} 处：" + "；".join(tag_notes[:3])
-                        + ("…" if len(tag_notes) > 3 else ""))
+        # 只列近五个财年的补缺；更早的（如 2007 年的旧标签）只计数，否则会淹没有用信息
+        recent = [n for n in tag_notes
+                  if not (m := re.search(r"@(\d{4})", n)) or int(m.group(1)) >= year - 4]
+        shown = "；".join(recent[:3]) + ("…" if len(recent) > 3 else "")
+        warnings.append(f"XBRL 跨标签补缺 {len(tag_notes)} 处（近五年 {len(recent)} 处）"
+                        + (f"：{shown}" if recent else ""))
     warnings += fmp_notes
 
     # 3) 行情。FMP 为主、Tiingo 兜底；市值 = 收盘价 × EDGAR 在外股数。
-    shares = _latest_shares(led, as_of)
+    shares, shares_why = _latest_shares(led, as_of)
     quote_notes: list[str] = []
 
     def _src(fetch):
@@ -543,7 +559,7 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
         led.put(f)
     warnings += quote_notes
     if shares is None:
-        warnings.append("EDGAR 无在外股数（封面数），不计算市值。")
+        warnings.append(shares_why)
     spot = next((f.period for f in quote_res.facts if f.key == "market_cap"), None)
 
     return _analyze(ticker, year, period_suffix, period, prior_period, as_of, led, store,

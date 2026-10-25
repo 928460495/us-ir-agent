@@ -36,3 +36,14 @@ def test_财年标签边界(start, end, fye, label):
 def test_财年末格式错误报错():
     with pytest.raises(ValueError):
         fiscal_label(None, date(2025, 9, 27), "927")
+
+
+@pytest.mark.parametrize("start,end,label", [
+    # Costco：12/12/12/16 周，前三季累计 252 天（联网验收发现）
+    (date(2024, 9, 2), date(2024, 11, 24), "2025Q1"),
+    (date(2024, 9, 2), date(2025, 2, 16), "2025H1"),
+    (date(2024, 9, 2), date(2025, 5, 11), "2025Q1-Q3"),
+    (date(2024, 9, 2), date(2025, 8, 31), "2025FY"),
+])
+def test_十二周季度的零售财年(start, end, label):
+    assert fiscal_label(start, end, "0831") == label

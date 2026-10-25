@@ -145,3 +145,45 @@ def test_us_gaap里没有美元事实时同样报错(fake_all, monkeypatch, tmp_
              "filed": "2025-10-31", "fy": 2025, "fp": "FY"}]}}}}}, "sid"))
     with pytest.raises(NoUsGaapFacts, match="美元"):
         pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+
+
+def test_补缺说明只列近年期间(fake_all, monkeypatch, tmp_path):
+    from ir_agent.sources import edgar_facts
+    orig = edgar_facts.parse_companyfacts
+
+    def noisy(doc, fye, sid, notes=None):
+        notes += [f"revenue@{y}FY 取自 SalesRevenueNet（主标签 X 无此期）" for y in range(2007, 2026)]
+        return orig(doc, fye, sid, notes=notes)
+    monkeypatch.setattr(edgar_facts, "parse_companyfacts", noisy)
+    r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+    w = next(x for x in r.warnings if "补缺" in x)
+    assert "2007FY" not in w and "revenue@2021FY" in w and "近五年" in w
+
+
+def _shares_only(monkeypatch, filed, period="2011Q1"):
+    from ir_agent.sources import edgar_facts
+    orig = edgar_facts.parse_companyfacts
+
+    def stale(doc, fye, sid, notes=None):
+        fs = [f for f in orig(doc, fye, sid, notes=notes) if f.key != "shares_outstanding"]
+        from ir_agent.ledger import Fact, Method
+        return fs + [Fact(key="shares_outstanding", value=D(941481), unit="股", period=period,
+                          as_of=filed, source_id=sid, method=Method.REPORTED)]
+    monkeypatch.setattr(edgar_facts, "parse_companyfacts", stale)
+
+
+def test_封面股数超过一年不计市值并说明(fake_all, monkeypatch, tmp_path):
+    # BRK-B 联网验收：最新封面股数是 2011 年的，乘今天的股价会静默算错市值
+    _shares_only(monkeypatch, date(2011, 5, 1))
+    r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+    assert not any(f.key == "market_cap" for f in r.quotes.facts)
+    assert any("2011-05-01" in w and "不计算市值" in w for w in r.warnings)
+
+
+def test_没有封面股数时说明多类股原因(fake_all, monkeypatch, tmp_path):
+    from ir_agent.sources import edgar_facts
+    orig = edgar_facts.parse_companyfacts
+    monkeypatch.setattr(edgar_facts, "parse_companyfacts", lambda doc, fye, sid, notes=None: [
+        f for f in orig(doc, fye, sid, notes=notes) if f.key != "shares_outstanding"])
+    r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+    assert any("多类股" in w and "不计算市值" in w for w in r.warnings)
