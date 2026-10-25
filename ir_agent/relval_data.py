@@ -86,6 +86,14 @@ def _peer_ttm(led: FactLedger, end: tuple[int, int] | None,
 
 _HALF_ENDS = (2, 4)
 _EBITDA_PARTS = ("operating_profit", "depreciation_amortization", "interest_expense_fe")
+_EBITDA_PARTS_PRE_INTEREST = ("operating_profit", "depreciation_amortization")
+
+
+def _ebitda_parts(led: FactLedger) -> tuple[str, ...]:
+    """CAS 营业利润已扣息，EBITDA 要加回利息；US GAAP 营业利润在利息之前，不加也不要求在场。"""
+    from ir_agent.operators.aggregates import ledger_op_is_pre_interest
+
+    return _EBITDA_PARTS_PRE_INTEREST if ledger_op_is_pre_interest(led) else _EBITDA_PARTS
 
 
 def balance_period(led: FactLedger, as_of: date, probe: str = "equity_attr_parent") -> str | None:
@@ -133,7 +141,7 @@ def flow_end(led: FactLedger, as_of: date) -> tuple[int, int] | None:
     for end in cands:
         for per in (_label(end), _label((end[0] - 1, 4)), _label((end[0] - 1, 2))):
             _ensure_da(led, per, as_of)
-        if all(flow_ttm(led, k, end, as_of) is not None for k in _EBITDA_PARTS):
+        if all(flow_ttm(led, k, end, as_of) is not None for k in _ebitda_parts(led)):
             return end
     return None
 
@@ -143,16 +151,16 @@ _Q_OF = {"Q1": 1, "H1": 2, "Q1-Q3": 3, "FY": 4}
 
 def _ebitda_ttm(led: FactLedger, end: tuple[int, int] | None,
                 as_of: date) -> tuple[Decimal, str] | None:
-    """EBITDA = 营业利润 + 折旧摊销 + max(利息费用, 0)，三项都取同一截止期的 TTM。
-    同业没出本期就退上一期（与 PE 同一规则）。"""
+    """EBITDA = 营业利润 + 折旧摊销 + max(利息费用, 0)，三项都取同一截止期的 TTM
+    （US GAAP 不加利息，见 _ebitda_parts）。同业没出本期就退上一期（与 PE 同一规则）。"""
     if end is None:
         return None
     for q in (end, _prev_quarter(end) if end[1] == 4 else (end[0] - 1, 4)):
         for per in (_label(q), _label((q[0] - 1, 4)), _label((q[0] - 1, 2))):
             _ensure_da(led, per, as_of)
-        vals = [flow_ttm(led, k, q, as_of) for k in _EBITDA_PARTS]
+        vals = [flow_ttm(led, k, q, as_of) for k in _ebitda_parts(led)]
         if all(v is not None for v in vals):
-            op, da, ie = vals
+            op, da, ie = (*vals, Decimal(0))[:3]
             return op + da + max(ie, Decimal(0)), f"TTM 截至 {_label(q)}"
     return None
 
@@ -212,6 +220,8 @@ def obs_from_ledger(code: str, name: str, led: FactLedger, period: str,
     eb = _ebitda_ttm(led, fe, as_of)
     if eb is None:
         op, da, ie = (_v(led, k, period, as_of) for k in _EBITDA_PARTS)
+        if _ebitda_parts(led) is _EBITDA_PARTS_PRE_INTEREST:
+            ie = None
         if op is not None and da is not None:
             eb = (op + da + max(ie or Decimal(0), Decimal(0)), f"FY {period}")
     growth, gbasis = _growth(led, period, as_of, fe)

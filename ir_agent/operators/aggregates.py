@@ -75,8 +75,26 @@ def interest_bearing_debt(ledger: FactLedger, period: str,
                 "有息负债")
 
 
+def op_is_pre_interest(op: Fact) -> bool:
+    """营业利润是否已在利息之前（即本身就是 EBIT）。
+
+    US GAAP 的 Operating Income 不含利息，CAS 的营业利润已扣利息。按事实自身的
+    币种判断（美元 = 取自 us-gaap 的 EDGAR 事实）—— 口径是数据的属性，不靠调用方
+    传参，也就不存在哪个调用点漏传而悄悄变口径。币种缺失按 CAS 处理。
+    """
+    return op.currency == "USD"
+
+
+def ledger_op_is_pre_interest(ledger: FactLedger) -> bool:
+    """账本里营业利润的口径（取任一条 operating_profit 事实判断）。"""
+    for (key, _period), facts in ledger._facts.items():      # noqa: SLF001
+        if key == "operating_profit" and facts:
+            return op_is_pre_interest(facts[0])
+    return False
+
+
 def ebit(ledger: FactLedger, period: str, as_of: date) -> Decimal | None:
-    """息税前利润。**中国准则下必须加回利息费用。**
+    """息税前利润。**中国准则下必须加回利息费用；US GAAP 营业利润即 EBIT。**
 
     「财务费用」在中国准则里列于「营业总成本」之内，因此**营业利润是
     扣息之后的**。凡是要衡量「与融资结构无关的经营表现」的地方 ——
@@ -89,9 +107,12 @@ def ebit(ledger: FactLedger, period: str, as_of: date) -> Decimal | None:
     利息费用为负（利息收入大于支出）时不倒扣 —— 那不是融资成本。
     """
     try:
-        op = ledger.get("operating_profit", period, as_of=as_of).value
+        op_fact = ledger.get("operating_profit", period, as_of=as_of)
     except (KeyError, LookAheadError):
         return None
+    op = op_fact.value
+    if op_is_pre_interest(op_fact):
+        return op
     try:
         ie = ledger.get("interest_expense_fe", period, as_of=as_of).value
     except (KeyError, LookAheadError):

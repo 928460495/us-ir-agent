@@ -27,6 +27,7 @@ from ir_agent.metrics import (
     MetricSpec,
     evaluate,
 )
+from ir_agent.operators.aggregates import op_is_pre_interest
 from ir_agent.operators.base import derive
 from ir_agent.periods import UnknownPeriod
 from ir_agent.periods import period_end_date
@@ -170,15 +171,17 @@ def _market(f) -> dict:
     if mc and eqp:
         v = None if eqp.value <= 0 else mc.value / eqp.value
         out["pb"] = (v, [mc, eqp])
-    if op and ie and tax and tp and te and cash:
-        # EBIT 与 DOL / Altman Z 同一口径 —— 中国准则下营业利润已扣息
-        ebit = op.value + max(ie.value, Decimal(0))
+    # EBIT 与 DOL / Altman Z 同一口径 —— 中国准则下营业利润已扣息，要加回；
+    # US GAAP 营业利润在利息之前，不加回，也不要求利息费用在场（苹果等不单报）
+    pre = op is not None and op_is_pre_interest(op)
+    if op and (ie or pre) and tax and tp and te and cash:
+        ebit = op.value if pre else op.value + max(ie.value, Decimal(0))
         rate = Decimal(0) if tp.value == 0 else tax.value / tp.value
         invested = te.value + _debt_of(f) - cash.value
         v = None if invested <= 0 else ebit * (Decimal(1) - rate) / invested
-        out["roic"] = (v, [op, ie, tax, tp, te, cash])
+        out["roic"] = (v, [x for x in (op, None if pre else ie, tax, tp, te, cash) if x])
     if mc and op and da and cash and te and eqp:
-        ebitda = op.value + da.value + (max(ie.value, Decimal(0)) if ie else 0)
+        ebitda = op.value + da.value + (max(ie.value, Decimal(0)) if ie and not pre else 0)
         # EBITDA 是合并口径，含少数股东那一份 —— EV 必须加回少数股东权益，
         # 分子分母才是同一群出资人（Damodaran / CFA 标准口径）。
         # 少数股东权益取「所有者权益合计 − 归母权益」，与相对估值模块同一定义；
