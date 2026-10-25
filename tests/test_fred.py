@@ -178,3 +178,32 @@ def test_A股宏观提示词分组不变():
     f = Fact(key="macro.cpi_yoy", value=D("0.01"), unit="ratio", period="2026-09",
              as_of=date(2026, 10, 1), source_id="em", method=Method.REPORTED)
     assert "汇率" not in MacroSnapshot([f], as_of=date(2026, 10, 25)).for_prompt()
+
+
+def test_分析时点是今天时取当前有效版本_不用FRED时区里还没到的日期(fake_fred, store):
+    # 联网发现：本机日期跑在美国前面时，realtime_end=今天 会被 FRED 拒绝（HTTP 400）
+    from datetime import timedelta
+    today = date.today()
+    fs = fred.fetch_series_asof("DGS10", today, store)
+    assert fake_fred[-1]["realtime_end"] == "9999-12-31"
+    assert any(f.key == "rate.ust_10y" for f in fs)
+    fred.fetch_series_asof("DGS10", today - timedelta(days=30), store)
+    assert fake_fred[-1]["realtime_end"] == (today - timedelta(days=30)).isoformat()
+
+
+def test_历史行情序列不带版本参数_截到as_of(monkeypatch, store):
+    monkeypatch.setenv("FRED_API_KEY", KEY)
+    seen = []
+
+    class R:
+        status_code = 200
+
+        def json(self):
+            return {"observations": [{"date": "2026-10-20", "value": "7700.1"},
+                                     {"date": "2026-10-21", "value": "."},
+                                     {"date": "2026-10-22", "value": "7757.17"}]}
+    monkeypatch.setattr(fred.requests, "get", lambda url, params=None, timeout=None: seen.append(params) or R())
+    rows = fred.history("SP500", date(2026, 1, 1), date(2026, 10, 22), store)
+    assert rows == [(date(2026, 10, 20), D("7700.1")), (date(2026, 10, 22), D("7757.17"))]
+    assert "realtime_start" not in seen[0] and seen[0]["observation_end"] == "2026-10-22"
+    assert all(KEY not in p.read_text(encoding="utf-8") for p in store.root.iterdir())

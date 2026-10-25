@@ -127,25 +127,29 @@ def quarterly_estimate(prev_rev, prev_cogs, cur_rev, cur_cogs) -> tuple[dict | N
 
 def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
               stmts: dict | None = None, quote: dict | None = None,
-              px: pd.DataFrame | None = None, mkt: pd.DataFrame | None = None) -> dict:
+              px: pd.DataFrame | None = None, mkt: pd.DataFrame | None = None,
+              facts: dict | None = None, shares: float | None = None,
+              splits: list | None = None) -> dict:
     """校准。上游（ir-agent）可注入数据，注入的部分不再自行取数：
 
     - stmts：与 `D.statements` 同形状的报表（事实账本供数，分析层与估值层同源）；
     - quote：`dict(source, price)`（账本里的现价，FMP → Tiingo）；
-    - px / mkt：个股与标普 500 的日线收盘（列名 Close，索引为日期），β 回归用。
+    - px / mkt：个股与标普 500 的日线收盘（列名 Close，索引为日期），β 回归用；
+    - facts：us-gaap 事实（ir-agent 已落快照、按分析时点过滤过的同一份 companyfacts）；
+    - shares：封面在外股数（百万股）；splits：拆股记录 [(除权日, 比例)]。
 
     独立使用时仍走 yfinance → Stooq（Stooq 现为 JS 验证页，yfinance 需另装）。
     """
     meta = D.resolve(symbol)
     D.assert_non_financial(meta)
-    g = D.facts(meta["cik"])
-    st = stmts if stmts is not None else D.statements(g, meta["ticker"], nyears)
+    g = facts if facts is not None else D.facts(meta["cik"])
+    st = stmts if stmts is not None else D.statements(g, meta["ticker"], nyears, splits=splits)
     inc, bal, cfs, shr = st["income"], st["balance"], st["cashflow"], st["shares"]
     ends = st["ends"]
     last = ends[-1]
 
     q = quote if quote is not None else D.quote(meta["ticker"])
-    sh_dei = D.shares_outstanding(meta["cik"])
+    sh_dei = shares if shares is not None else D.shares_outstanding(meta["cik"])
     shares = sh_dei if np.isfinite(sh_dei) else q.get("shares", np.nan)
     if not np.isfinite(shares):
         raise D.DataError("取不到在外股数（dei 与行情源均无），无法折算每股价值。")

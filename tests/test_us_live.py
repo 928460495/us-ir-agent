@@ -84,3 +84,23 @@ def test_FRED广义美元指数(store):
     fs = fred.fetch_series_asof("TWEXBGSMTH", TODAY, store)
     lvl = max((f for f in fs if f.key == "macro.usd_index"), key=lambda f: f.period)
     assert 80 < lvl.value < 160 and any(f.key == "macro.usd_index_yoy" for f in fs)
+
+
+def test_英伟达估值供数_拆股还原且两层对账一致(tmp_path):
+    import sys
+    from ir_agent import dcf_data_us as M, pipeline
+    sys.path.insert(0, str(M.US_DCF_DIR))
+    import us_calibrate as C
+    r = pipeline.run("NVDA", 2025, TODAY, snapshot_dir=tmp_path)
+    fye = r.store.load(r.sec_meta["submissions_sid"]).payload["fiscalYearEnd"]
+    sid = next(f.source_id for f in r.financials.facts if f.source_id.startswith("sec_companyfacts"))
+    mi = M.market_inputs("NVDA", TODAY, r.store, r.ledger)
+    assert ("2024-06-10", 10.0) in mi["splits"]
+    sh = max((f for (k, _p), fs in r.ledger._facts.items() if k == "shares_outstanding" for f in fs),
+             key=lambda f: f.as_of)
+    cal = C.calibrate("NVDA", facts=M.pit_us_gaap(r.store.load(sid).payload, TODAY),
+                      shares=float(sh.value) / 1e6, splits=mi["splits"], quote=mi["quote"],
+                      px=mi["px"], mkt=mi["mkt"])
+    dil = cal["stmts"]["shares"]["摊薄股数"].tolist()
+    assert max(dil) / min(dil) < 1.2                       # 拆股已还原：五年股数同一量级
+    assert M.reconcile(cal["stmts"] | {"ends": cal["periods"]["annual"]}, r.ledger, TODAY, fye) == []

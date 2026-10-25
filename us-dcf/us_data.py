@@ -450,9 +450,10 @@ def assert_complete(inc, bal, cfs, ends, diag) -> None:
             "print([t for t in g if '关键词' in t])\" 找到实际标签后补进 us_data.py 的 TAGS_* 链。")
 
 
-def statements(g: dict, ticker: str, nyears: int = 5) -> dict:
-    """归一化三表。返回 DataFrame（行=期末日，列=科目，单位百万美元）+ 抽取诊断。"""
-    sp = split_history(ticker)
+def statements(g: dict, ticker: str, nyears: int = 5, splits: list | None = None) -> dict:
+    """归一化三表。返回 DataFrame（行=期末日，列=科目，单位百万美元）+ 抽取诊断。
+    splits 给定时不再自行取拆股记录（上游由 Tiingo 日线的 splitFactor 提取）。"""
+    sp = splits if splits is not None else split_history(ticker)
     rev = series(g, TAGS_IS["营业收入"])
     if not rev:
         raise DataError("取不到任何年度营业收入 —— 该公司可能不按 us-gaap 申报，或刚上市。")

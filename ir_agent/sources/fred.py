@@ -90,12 +90,18 @@ def _period(d: date, freq: str) -> str:
     return d.isoformat()
 
 
+def _realtime_end(as_of: date) -> str:
+    """版本窗口的终点。分析时点是今天或昨天时取「当前有效版本」（9999-12-31）：FRED 按美国
+    时间计日期，本机日期跑在前面时，realtime_end=今天 会被拒绝（HTTP 400，联网发现）。"""
+    return "9999-12-31" if as_of >= date.today() - timedelta(days=1) else as_of.isoformat()
+
+
 def _observations(series_id: str, as_of: date, store) -> tuple[list[dict], str]:
     start = (as_of - HISTORY).isoformat()
     # 版本窗口与观测窗口同起点：观测日期不早于该起点的数值不可能在起点之前公布，
     # 截断不改变任何返回观测的真实生效日；从 1776 年开窗则日度序列超出版本数上限。
     public = {"series_id": series_id, "file_type": "json",
-              "realtime_start": start, "realtime_end": as_of.isoformat(),
+              "realtime_start": start, "realtime_end": _realtime_end(as_of),
               "observation_start": start}
     try:
         r = requests.get(URL, params={**public, "api_key": _key()}, timeout=TIMEOUT)
@@ -116,7 +122,7 @@ def fetch_series_asof(series_id: str, as_of: date, store) -> list[Fact]:
         raise ValueError(f"{series_id} 不在美国宏观登记表里")
     obs, sid = _observations(series_id, as_of, store)
     points: dict[date, tuple[Decimal, date]] = {}
-    current = as_of.isoformat()
+    current = _realtime_end(as_of)
     for o in obs:
         if o.get("realtime_end") != current:
             continue                         # 已被后续修订取代的旧版本
@@ -141,6 +147,25 @@ def fetch_series_asof(series_id: str, as_of: date, store) -> list[Fact]:
                             as_of=avail, source_id=sid, method=Method.REPORTED,
                             currency="USD" if s.unit == "美元" else None))
     return out
+
+
+def history(series_id: str, start: date, end: date, store) -> list[tuple[date, Decimal]]:
+    """不修订的行情类序列（如标普 500 SP500）的普通历史：不带版本参数，截到 end。
+
+    这类序列取「当时版本」没有意义（指数不会被修订），日度又会撞上 FRED 单次两千个版本的上限。"""
+    public = {"series_id": series_id, "file_type": "json",
+              "observation_start": start.isoformat(), "observation_end": end.isoformat()}
+    try:
+        r = requests.get(URL, params={**public, "api_key": _key()}, timeout=TIMEOUT)
+    except requests.RequestException as e:
+        raise MacroUnavailable(f"FRED {series_id} 网络错误 {e.__class__.__name__}") from None
+    if r.status_code != 200:
+        raise MacroUnavailable(f"FRED {series_id} HTTP {r.status_code}")
+    body = r.json()
+    store.save(source=f"fred_{series_id.lower()}_history", payload=body, url=URL,
+               fetched_at=datetime.now(), params=public)
+    return [(date.fromisoformat(o["date"]), Decimal(o["value"])) for o in body.get("observations") or []
+            if o.get("value") not in (None, "", ".")]
 
 
 def fetch_us_macro(as_of: date, store) -> tuple[list[Fact], list[str]]:
