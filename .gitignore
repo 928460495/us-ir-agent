@@ -7,6 +7,7 @@ runs/
 preview_dashboard.html
 *.html
 !templates/*.html
+!tests/fixtures/**/*.html
 out/
 .venv/
 .superpowers/
