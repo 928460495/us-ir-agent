@@ -382,4 +382,6 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
                  buyback_pct=round(buyback, 5)),
         _rho=round(_rho, 3),
         rev={e: float(rev[e]) for e in ends},
+        # 各年营业成本：ir-agent 的 assume._base_margin_of 按年度从 rev / cogs 算基期毛利率
+        cogs={e: float(_safe(inc, "营业成本", e)) for e in ends},
     )

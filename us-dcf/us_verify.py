@@ -11,6 +11,7 @@
 from __future__ import annotations
 import math, os, re as _re
 import numpy as np
+import re
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter as CL
 
@@ -34,6 +35,106 @@ def _find(m: dict, key: str) -> int:
     if not hits:
         raise KeyError(key)
     return m[sorted(hits, key=len)[0]]
+
+
+# 跨表引用解析 —— 自 ashare_verify 原样移植。「1b_驱动分解」接入后，1_Assumptions 的营收增速 /
+# 毛利率三档格是 ='1b_驱动分解'!B12 这类跨表引用；不解析就会把公式字符串当值，独立重算整个断掉。
+_REF_RE = re.compile(
+    # 「!」不设为可选——本表引用已由 _SELF_REF_RE 先行拦截；这里若把「!」设为
+    # 可选，形如 "=B1+C1" 的普通公式会被表名分组贪婪吞掉 "B1+" 再回溯匹配出
+    # "C1"，被误判成引用。跨表引用必须显式带「!」，因此收紧为必选。
+    r"^=\s*(?:'([^']+)'|([^!'\s]+))!\$?([A-Z]+)\$?(\d+)\s*$")
+_SELF_REF_RE = re.compile(r"^=\s*\$?([A-Z]+)\$?(\d+)\s*$")
+# 引用层数上限。原为 5；ir-agent 公式化（2026-10-14）后「1b_驱动分解」的营收
+# 合成格逐年引用上一年（第 t 年 → 第 t−1 年 → … → 基期），加上 1_假设 → 增速行
+# 的两跳，十年预测的链深约 2×10+3。64 仍能拦住真正的循环引用。
+_MAX_REF_DEPTH = 64
+_ARITH_CELL_RE = re.compile(r"\$?([A-Z]{1,3})\$?(\d{1,7})")
+
+
+class _CircularRefError(ValueError):
+    """_cell_value 的引用层数守卫专用异常——是 ValueError 的子类（不改变既有
+    `except ValueError` 调用方的行为），只为了在 _eval_arith 里能把它跟『解析
+    失败』的普通 ValueError 区分开，见 _eval_arith 里的说明。"""
+
+
+def _eval_arith(wb, sheet, expr, _depth):
+    """对『仅含本表单元格引用与四则运算』的简单算式求值。
+
+    驱动因子分解的『合成』行故意写成 Excel 公式（如 (1+C4)*(1+C5)-1 或
+    0.1415+(C10+C11)/100）而非常量——这样改一个因子能顺着公式一路传导到
+    2_利润表/5_DCF。但 read_inputs 的独立复算得先从这类公式里拿到一个
+    浮点数：_resolve_ref 只认『整格就是一个引用』（=B48 / =1b_驱动分解!B5），
+    对这种四则运算公式无能为力，会直接把公式字符串丢回去，下游 float()
+    立刻炸掉。这里把公式里出现的单元格逐个换成其（可能还要跨表/递归解析
+    出来的）数值，再对剩下的纯算式求值。只覆盖本项目自己生成的这类简单
+    算式——不支持函数调用等更复杂形式；解析不出来就返回 None，调用方按
+    老规矩原样返回公式字符串，不影响其余既有行为。
+    """
+    def repl(m):
+        v = _cell_value(wb, sheet, f"{m.group(1)}{m.group(2)}", _depth + 1)
+        return f"({float(v)})"
+    try:
+        text = _ARITH_CELL_RE.sub(repl, expr)
+    except _CircularRefError:
+        # 循环引用的诊断信息必须穿透这里，不能被下面那条兜底 except 吞掉——
+        # 否则排查者看到的只是一个莫名其妙的 float() 类型错误，而不是「这里可能
+        # 有循环引用」。别的 ValueError（比如 repl 里 float(v) 碰到解析不出数值
+        # 的东西）仍然维持老行为：走 return None，让调用方原样吐回公式串。
+        raise
+    except (TypeError, ValueError):
+        return None
+    if not re.fullmatch(r"[0-9+\-*/().\s]+", text):
+        return None          # 残留非数字字符（如函数名）——不是我们支持的算式
+    if "**" in text:
+        # 显式拒绝乘方：白名单按字符放行 '*'，两个相邻就拼成 Python 的乘方
+        # 运算符。Excel 自己的乘方符号是 '^'（已被上面的 fullmatch 挡掉），
+        # 只有手改过的工作簿才写得出 9**9**9 这种指数塔 —— 它会算出一个几亿位
+        # 的大整数，把校验进程拖死。
+        return None
+    try:
+        return float(eval(text, {"__builtins__": {}}, {}))       # noqa: S307
+    except Exception:
+        return None
+
+
+def _resolve_ref(v):
+    """把单元格里的引用式拆成 (表名 或 None, 地址)。不是引用则返回 None。
+
+    此前只认本表引用（=B48）。接入驱动因子分解后，「1_假设」的增速与毛利率
+    单元格要指向「1b_驱动分解」，不支持跨表就会让 read_inputs 拿到公式字符串
+    然后 float() 抛异常 —— **独立复算验证会整个断掉**。
+    """
+    if not isinstance(v, str):
+        return None
+    m = _SELF_REF_RE.match(v.strip())
+    if m:
+        return None, f"{m.group(1)}{m.group(2)}"
+    m = _REF_RE.match(v.strip())
+    if not m:
+        return None
+    sheet = m.group(1) or m.group(2)
+    if not sheet:
+        return None
+    return sheet, f"{m.group(3)}{m.group(4)}"
+
+
+def _cell_value(wb, sheet, addr, _depth=0):
+    """读一个单元格的值，逐层解析引用（含跨表）。"""
+    if _depth > _MAX_REF_DEPTH:
+        raise _CircularRefError(
+            f"引用层数超过 {_MAX_REF_DEPTH} —— 可能存在循环引用")
+    v = sheet[addr].value
+    ref = _resolve_ref(v)
+    if ref is None:
+        if isinstance(v, str) and v.strip().startswith("="):
+            ev = _eval_arith(wb, sheet, v.strip()[1:], _depth)
+            if ev is not None:
+                return ev
+        return v
+    name, target = ref
+    nxt = wb[name] if name else sheet
+    return _cell_value(wb, nxt, target, _depth + 1)
 
 
 def read_inputs(path: str) -> dict:
@@ -75,7 +176,10 @@ def read_inputs(path: str) -> dict:
         out = []
         for i in range(n):
             r = _find(am, f"{hdr[nh+i]} {prefix}")
-            out.append(float(a.cell(r, 1 + scen).value))
+            v = a.cell(r, 1 + scen).value
+            if isinstance(v, str):          # 驱动分解接入后是跨表引用，逐层解析
+                v = _cell_value(wb, a, f"{'ABCD'[scen]}{r}")
+            out.append(float(v))
         return out
 
     o = {k: float(g(k)) for k in

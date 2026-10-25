@@ -58,6 +58,167 @@ NUM = "#,##0.0"; PCT = "0.0%"; PCT2 = "0.00%"; USD = '"$"#,##0.00'
 MX = "0.00"; D1 = "0.0"; Z = "0.000000"
 
 
+# 「1b_驱动分解」—— 自 ashare_build 原样移植（只换金额单位）：两个引擎同一张驱动表。
+_SCEN_COLS = ("B", "C", "D")          # Bull / Base / Bear —— 与 1_Assumptions 一致
+
+
+_PCT_UNITS = ("变化率", "%", "百分比")
+
+
+def _build_driver_sheet(wb, drv, YE, assum_ws, g_row, m_row):
+    """建「1b_驱动分解」，并把 1_Assumptions 的增速/毛利率改为跨表引用。
+
+    **公式化（ir-agent 2026-10-14，drivers schema 2）。** ir-agent 交来模式、因子、
+    常量、基期值、每档逐年取值，以及两条公式的**已校验记号序列**。这里**不做
+    解析**，只把记号换成单元格引用（`_ref_tokens`）——解析只在 ir-agent 一处。
+
+    布局：常量区 → 基期（各因子第 0 年、营收₀、毛利率₀）→ 每年：各因子三档取值
+    （黄底可手改）、「营收（合成）」「营收增速」「毛利率（合成）」。1_Assumptions 的营收
+    增速与毛利率引用「营收增速」「毛利率（合成）」两行。改一个因子或常量，合成格
+    与下游估值随之重算。
+
+    **列序必须与 1_Assumptions 一致（B=Bull C=Base D=Bear）**，它与 CHOOSE($B$SCEN,…)
+    绑定。写反不会让验算失败 —— 公式本身没错，只是「选悲观」会选出乐观值。
+    """
+    ds = wb.create_sheet("1b_驱动分解", 2)
+    ds.column_dimensions["A"].width = 34
+    for c in "BCD": ds.column_dimensions[c].width = 12
+    ds.column_dimensions["E"].width = 12
+    ds.column_dimensions["F"].width = 40
+    r = 1
+    ds.cell(r, 1, f"驱动因子分解（{drv['mode']}模式）").font = Font(bold=True, size=12)
+    r += 1
+    for t in ("revenue", "gross_margin"):
+        txt = (drv.get("formula_text") or {}).get(t)
+        if txt:
+            ds.cell(r, 1, txt).font = Font(size=9, color="808080"); r += 1
+    r += 1
+    for i, t in enumerate(["项目 / 年", "Bull", "Base", "Bear", "单位", "出处"]):
+        c = ds.cell(r, i + 1, t); c.font = F_COL; c.fill = P_B
+    r += 1
+
+    factors = drv["factors"]
+    const_row: dict[str, int] = {}
+    for c in drv.get("constants") or []:
+        ds.cell(r, 1, f"常量 {c['name']}").font = Font(size=10)
+        cc = ds.cell(r, 2, c["value"]); cc.font = F_IN; cc.fill = P_Y
+        ds.cell(r, 6, c.get("source", "")).font = Font(size=9, color="808080")
+        const_row[c["name"]] = r; r += 1
+
+    base = drv["base"]
+    base_row: dict[str, int] = {}
+    for f in factors:
+        if f["short"] not in (base.get("factors") or {}):
+            continue
+        ds.cell(r, 1, f"基期 {f['label']}").font = Font(size=10)
+        cc = ds.cell(r, 2, base["factors"][f["short"]]); cc.font = F_IN; cc.fill = P_Y
+        cc.number_format = PCT if f["unit"] in _PCT_UNITS else "0.00"
+        ds.cell(r, 5, f["unit"]).font = Font(size=9, color="808080")
+        base_row[f["short"]] = r; r += 1
+
+    def ref(tokens, yi, col, case, rows):
+        """记号 → Excel 公式文本。yi 为第几年（0 起），-1 表示基期。"""
+        out = []
+        for kind, val in tokens:
+            if kind in ("num", "op"):
+                out.append(val)
+            elif kind == "lp":
+                out.append("(")
+            elif kind == "rp":
+                out.append(")")
+            elif kind == "name":
+                if val in const_row:
+                    out.append(f"$B${const_row[val]}")
+                elif yi < 0:
+                    out.append(f"$B${base_row[val]}")
+                else:
+                    out.append(f"{col}{rows['f'][yi][val]}")
+            elif kind == "prev":
+                if yi < 0:
+                    raise ValueError(f"第 0 年取不到 上期({val})")
+                if val == "营收":
+                    out.append(f"$B${rows['rev0']}" if yi == 0
+                               else f"{col}{rows['rev'][yi - 1]}")
+                elif val == "毛利率":
+                    anc = drv.get("anchor_y1")
+                    if yi == 0:
+                        out.append(f"$B${rows['gm0']}")
+                    elif yi == 1 and anc:
+                        out.append(f"{anc[case]}")
+                    else:
+                        out.append(f"{col}{rows['gm'][yi - 1]}")
+                else:
+                    out.append(f"$B${base_row[val]}" if yi == 0
+                               else f"{col}{rows['f'][yi - 1][val]}")
+            elif kind == "base":
+                if val == "营收":
+                    out.append(f"$B${rows['rev0']}")
+                elif val == "毛利率":
+                    bls = drv.get("base_levels")
+                    out.append(f"{bls[case][max(yi, 0)]}" if bls and yi >= 0
+                               else f"$B${rows['gm0']}")
+                else:
+                    out.append(f"$B${base_row[val]}")
+        return "".join(out)
+
+    rows = {"f": [], "rev": [], "growth": [], "gm": []}
+    fm = drv["formulas"]
+    # 第 0 年的营收、毛利率：变化模式取账本（亿元），水平模式由基期因子代入公式。
+    ds.cell(r, 1, "基期 营收（百万美元）").font = Font(size=10, bold=True)
+    if drv["mode"] == "水平":
+        ds.cell(r, 2, "=" + ref(fm["revenue"], -1, "B", "base", rows)).font = F_FX
+    else:
+        ds.cell(r, 2, base["revenue"]).font = F_IN
+    ds.cell(r, 2).number_format = "#,##0.00"
+    rows["rev0"] = r; r += 1
+    ds.cell(r, 1, "基期 毛利率").font = Font(size=10, bold=True)
+    if drv["mode"] == "水平":
+        ds.cell(r, 2, "=" + ref(fm["gross_margin"], -1, "B", "base", rows)).font = F_FX
+    else:
+        ds.cell(r, 2, base["margin"]).font = F_IN
+    ds.cell(r, 2).number_format = PCT
+    rows["gm0"] = r; r += 2
+
+    # 覆盖年数以 values 实际给出的档数为准，不强行对齐 YE 全长 —— 未覆盖的年份
+    # 1_Assumptions 保留原直接取值，不被本表覆盖。
+    n_cov = len(drv["values"]["base"])
+    cases = ("bull", "base", "bear")
+    for yi, y in enumerate(YE[:n_cov]):
+        frow = {}
+        for fi, f in enumerate(factors):
+            ds.cell(r, 1, f"{y} {f['label']}").font = Font(size=10)
+            for ci, case in enumerate(cases):
+                cc = ds.cell(r, 2 + ci, drv["values"][case][yi][fi])
+                cc.font = F_IN; cc.fill = P_Y
+                cc.number_format = PCT if f["unit"] in _PCT_UNITS else "0.00"
+            ds.cell(r, 5, f["unit"]).font = Font(size=9, color="808080")
+            frow[f["short"]] = r; r += 1
+        rows["f"].append(frow)
+        for key, label, toks, fmt in (("rev", "营收（合成）", fm["revenue"], "#,##0.00"),
+                                      ("gm", "毛利率（合成）", fm["gross_margin"], PCT)):
+            ds.cell(r, 1, f"{y} {label}").font = Font(size=10, bold=True)
+            for ci, col in enumerate(_SCEN_COLS):
+                cc = ds.cell(r, 2 + ci, "=" + ref(toks, yi, col, cases[ci], rows))
+                cc.font = F_FX; cc.number_format = fmt
+            rows[key].append(r); r += 1
+            if key == "rev":
+                ds.cell(r, 1, f"{y} 营收增速（合成）").font = Font(size=10, bold=True)
+                for ci, col in enumerate(_SCEN_COLS):
+                    prev = (f"$B${rows['rev0']}" if yi == 0
+                            else f"{col}{rows['rev'][yi - 1]}")
+                    cc = ds.cell(r, 2 + ci, f"={col}{rows['rev'][yi]}/{prev}-1")
+                    cc.font = F_FX; cc.number_format = PCT
+                rows["growth"].append(r); r += 1
+        r += 1
+
+    # 1_Assumptions 的判断项改为引用本表 —— 只覆盖本表实际分解到的年份
+    for start, key in ((g_row, "growth"), (m_row, "gm")):
+        for yi, r_ in enumerate(rows[key]):
+            for ci, col in enumerate(_SCEN_COLS):
+                assum_ws.cell(start + yi, 2 + ci,
+                              f"='1b_驱动分解'!{col}{r_}").font = F_FX
+
+
 def _erp_note(cal: dict) -> str:
     """ERP 这一格的注释要把「为什么默认用隐含值」和「还有哪些口径」都摆出来。"""
     e = cal.get("erp_info") or {}
@@ -478,6 +639,10 @@ def build(cal: dict, path: str) -> dict:
     cal["_rows"] = dict(SCEN=SCEN, G_ROW=G_ROW, M_ROW=M_ROW, CX_ROW=CX_ROW, SB_ROW=SB_ROW, IT=IT_ROWS,
                         GR=GR, OR_=OR_, DR=DR, FN=FN, DG=DG_ROW, DM=DM_ROW,
                         HC=HC, CC=CC, BASE=BASE, NH=NH, NY=NY, ENDS=ENDS)
+    # 驱动因子分解：只有上游（ir-agent 的方法论预研）给出 drivers 时才建表；
+    # 没有时工作簿形状与从前完全一致（与 ashare_build 同一约定）
+    if JU.get("drivers"):
+        _build_driver_sheet(wb, JU["drivers"], YE, ws, G_ROW, M_ROW)
     return _statements(wb, cal, path)
 
 
