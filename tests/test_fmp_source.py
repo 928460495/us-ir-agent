@@ -143,3 +143,11 @@ def test_主源多版本时用最新版本比对():
     res = resolve.resolve([("edgar", lambda: primary),
                            ("fmp", lambda: [_f("revenue", "2024FY", 90)])], cross_check=True)
     assert res.disagreements == []
+
+
+def test_非美元报告的行跳过(monkeypatch, store):
+    # 审查 I3：TSM 这类公司的新台币数不能标成美元
+    twd = [{**INCOME_FY[0], "reportedCurrency": "TWD"}, {**INCOME_FY[1], "reportedCurrency": "USD"}]
+    fake_http(monkeypatch, routes={("income-statement", "annual"): twd})
+    fs = {(f.key, f.period) for f in fmp.fetch_statements_fmp("AAPL", store, "0927")}
+    assert ("revenue", "2025FY") not in fs and ("revenue", "2024FY") in fs

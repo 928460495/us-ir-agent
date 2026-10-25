@@ -1,9 +1,12 @@
 """美国宏观与利率：FRED / ALFRED。
 
-**时点**：请求带 `realtime_start = realtime_end = as_of`（ALFRED 的「当时版本」），返回的
-是截至 as_of 当天官方公布过的数值 —— GDP 初值、而不是三个月后的修订值。每个观测的
-`realtime_start` 就是该数值开始可见的日期，直接作为事实的 as_of。A 股宏观只能按「统计期末
-+ 保守滞后」推算披露日，这里有真实的版本日期。
+**时点**：请求的版本窗口是 `[FRED 最早日期, as_of]`（ALFRED），每个观测日期取 `realtime_end ==
+as_of` 的那一版 —— 即 as_of 当天仍然有效的版本：GDP 初值，而不是三个月后的修订值。该版本的
+`realtime_start` 就是它开始可见的日期，作为事实的 as_of。
+
+注意 FRED 会把返回的 realtime_start / realtime_end **截到请求窗口内**：若窗口是
+`[as_of, as_of]`，每条观测的生效日都会被截成 as_of，真实发布日就丢了（审查发现，此前即如此）。
+A 股宏观只能按「统计期末 + 保守滞后」推算披露日，这里有真实的版本日期。
 
 **指标**：ISM PMI、Conference Board 领先指数属付费数据，不用。领先 / 同步 / 滞后的归类按
 CFA 三条定义（转折点先于 / 接近 / 晚于整体经济）套用到 FRED 可得指标，是本项目的映射。
@@ -26,6 +29,7 @@ from ir_agent.sources.macro import (COINCIDENT, LAGGING, LEADING, MacroSnapshot,
 URL = "https://api.stlouisfed.org/fred/series/observations"
 TIMEOUT = 20
 HISTORY = timedelta(days=366 * 6)            # 取六年：够算同比与近几年趋势
+REALTIME_EARLIEST = "1776-07-04"             # FRED 的版本日期下限
 
 
 @dataclass(frozen=True)
@@ -81,7 +85,7 @@ def _period(d: date, freq: str) -> str:
 
 def _observations(series_id: str, as_of: date, store) -> tuple[list[dict], str]:
     public = {"series_id": series_id, "file_type": "json",
-              "realtime_start": as_of.isoformat(), "realtime_end": as_of.isoformat(),
+              "realtime_start": REALTIME_EARLIEST, "realtime_end": as_of.isoformat(),
               "observation_start": (as_of - HISTORY).isoformat()}
     try:
         r = requests.get(URL, params={**public, "api_key": _key()}, timeout=TIMEOUT)
@@ -102,7 +106,10 @@ def fetch_series_asof(series_id: str, as_of: date, store) -> list[Fact]:
         raise ValueError(f"{series_id} 不在美国宏观登记表里")
     obs, sid = _observations(series_id, as_of, store)
     points: dict[date, tuple[Decimal, date]] = {}
+    current = as_of.isoformat()
     for o in obs:
+        if o.get("realtime_end") != current:
+            continue                         # 已被后续修订取代的旧版本
         if o.get("value") in (None, "", "."):
             continue
         points[date.fromisoformat(o["date"])] = (Decimal(o["value"]),

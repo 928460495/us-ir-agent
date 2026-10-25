@@ -11,8 +11,10 @@ submissions.zip。剔除项如实回报：同业集合少了谁会直接改变�
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -22,6 +24,9 @@ from ir_agent.sources.taxonomy import MIN_PEERS
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "ff49_siccodes.txt"
 BROWSE_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
+SIC_LIST_URL = "https://www.sec.gov/search-filings/standard-industrial-classification-sic-code-list"
+CACHE_TTL_DAYS = 7
+_MIN_SEC_CODES = 100        # 真实码表约 440 个；解析出的少于此数视为版式已变，退回全区间
 PAGE = 100
 MAIN_EXCHANGES = ("NYSE", "Nasdaq")
 _CIK_RE = re.compile(r"CIK=(\d{1,10})")
@@ -67,18 +72,60 @@ def sic_codes_of(ff49: int) -> list[int]:
                    for s in range(lo, hi + 1)})
 
 
+def _cache_get(store, name: str):
+    p = Path(store.root) / "_cache" / name
+    if not p.exists():
+        return None
+    d = json.loads(p.read_text(encoding="utf-8"))
+    if datetime.now() - datetime.fromisoformat(d["fetched"]) > timedelta(days=CACHE_TTL_DAYS):
+        return None
+    return d
+
+
+def _cache_put(store, name: str, payload: dict) -> None:
+    p = Path(store.root) / "_cache" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"fetched": datetime.now().isoformat(), **payload}), encoding="utf-8")
+
+
+def sec_sic_codes(store) -> set[int] | None:
+    """SEC 实际使用的 SIC 码（约 440 个）。FF49 的区间按整数展开有上千个码，多数 SEC 从不
+    使用 —— 不过滤的话零售一个行业就要请求 445 次。取不到或版式变了返回 None（调用方退回全区间）。"""
+    hit = _cache_get(store, "sec_sic_codes.json")
+    if hit is not None:
+        return set(hit["codes"])
+    try:
+        text, sid = edgar.get_text(SIC_LIST_URL, {}, "sec_sic_list", store)
+    except edgar.SecIdentityMissing:
+        raise
+    except Exception:                                       # noqa: BLE001
+        return None
+    codes = {int(c) for c in re.findall(r"<td[^>]*>\s*(\d{4})\s*</td>", text)}
+    if len(codes) < _MIN_SEC_CODES:
+        return None
+    _cache_put(store, "sec_sic_codes.json", {"codes": sorted(codes), "source_id": sid})
+    return codes
+
+
 def companies_with_sic(sic: int, store) -> set[str]:
-    """SEC 按 SIC 列出的公司 CIK（10 位补零）。翻页直到某页不满或没有新公司。"""
+    """SEC 按 SIC 列出的公司 CIK（10 位补零）。翻页直到某页不满或没有新公司。
+    按 SIC 在本地缓存 CACHE_TTL_DAYS 天，缓存里记着原始快照的 source_id。"""
+    hit = _cache_get(store, f"sec_sic_{sic}.json")
+    if hit is not None:
+        return set(hit["ciks"])
     found: set[str] = set()
+    sids: list[str] = []
     start = 0
     while True:
-        text, _ = edgar.get_text(BROWSE_URL, {"action": "getcompany", "SIC": sic, "type": "",
-                                              "owner": "include", "count": PAGE, "start": start},
-                                 "sec_browse_sic", store)
+        text, sid = edgar.get_text(BROWSE_URL, {"action": "getcompany", "SIC": sic, "type": "",
+                                                "owner": "include", "count": PAGE, "start": start},
+                                   "sec_browse_sic", store)
+        sids.append(sid)
         page = {edgar.pad_cik(c) for c in _CIK_RE.findall(text)}
         new = page - found
         found |= page
         if len(page) < PAGE or not new:
+            _cache_put(store, f"sec_sic_{sic}.json", {"ciks": sorted(found), "source_ids": sids})
             return found
         start += PAGE
 
@@ -109,21 +156,27 @@ def peer_set_us(ticker: str, store, min_peers: int = MIN_PEERS) -> Peers:
     by_cik: dict[str, list[str]] = {}
     for t, info in tickers.items():
         by_cik.setdefault(info.cik, []).append(t)
+    valid = sec_sic_codes(store)
     seen: set[str] = set()
+    no_ticker = 0
     for s in sic_codes_of(num):
+        if valid is not None and s not in valid:
+            continue
         for cik in sorted(companies_with_sic(s, store) - seen):
             seen.add(cik)
             if cik == me.cik:
                 continue
             codes = by_cik.get(cik)
             if not codes:
-                out.excluded.append((cik, "", "SEC 代码表中无交易代码（多为已退市或未上市）"))
+                no_ticker += 1                          # 退市空壳可能上千家，只计数不逐条列
                 continue
             info = tickers[codes[0]]                  # 多类股（BRK-A / BRK-B）只计一家
             if info.exchange not in MAIN_EXCHANGES:
                 out.excluded.append((codes[0], info.name, f"交易所 {info.exchange or '未知'}，非 NYSE / Nasdaq"))
                 continue
             out.members.append(Member(codes[0], info.name))
+    if no_ticker:
+        out.excluded.append(("", "", f"SEC 代码表中无交易代码的公司 {no_ticker} 家（多为已退市或未上市）"))
     if not out.members:
         raise IndustryUnavailable(f"{ticker}: 行业「{used}」下没有可用同业")
     out.thin = len(out.members) < min_peers

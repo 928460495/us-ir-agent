@@ -6,8 +6,8 @@
     都按各自的申报日作为新版本入账 —— 时点守卫因此能还原「当时看到的是哪个数」；
   - 只收定期报告（10-K / 10-Q 及其修订）。
 
-**标签选择**（移植自 us-dcf `pick_series`）: 一个账本键有多条候选标签时，按期间覆盖度选主
-标签，主标签缺期才从次优标签补，每次补缺记一条说明。逐期混取会静默灌入语义不同的数 ——
+**标签选择**（思路来自 us-dcf `pick_series`）: 一个账本键有多条候选标签时，在覆盖最新期间的
+候选里按优先序选主标签，主标签缺期才从次优标签补，每次补缺记一条说明。逐期混取会静默灌入语义不同的数 ——
 us-dcf 实测苹果「税前利润」的第二候选标签装的是境外税前利润。
 """
 
@@ -17,6 +17,7 @@ from datetime import date
 from decimal import Decimal
 
 from ir_agent.ledger import Fact, Method
+from ir_agent.periods import sort_key
 from ir_agent.sources import edgar
 from ir_agent.sources.us_periods import fiscal_label
 
@@ -76,7 +77,8 @@ _INSTANT: dict[str, tuple[str, ...]] = {
     "short_loan": ("ShortTermBorrowings", "CommercialPaper", "OtherShortTermBorrowings"),
     "noncurrent_liab_1y": ("LongTermDebtCurrent", "DebtCurrent"),
     "current_liabilities": ("LiabilitiesCurrent",),
-    "long_loan": ("LongTermDebtNoncurrent", "LongTermDebt"),
+    # 不收 LongTermDebt：它含一年内到期部分，与 noncurrent_liab_1y 叠加会重复计入有息负债
+    "long_loan": ("LongTermDebtNoncurrent",),
     "lease_liability": ("OperatingLeaseLiabilityNoncurrent",),
     "total_liabilities": ("Liabilities",),
     "retained_earnings": ("RetainedEarningsAccumulatedDeficit",),
@@ -129,7 +131,16 @@ def _pick(gaap: dict, key: str, tags: tuple[str, ...], unit: str, duration: bool
     if not cands:
         return []
     cover = {t: {r[0] for r in rs} for t, rs in cands.items()}
-    best = max(cands, key=lambda t: (len(cover[t]), -tags.index(t)))
+    # 主标签: 覆盖最新期间的候选里按优先序取。不按全历史覆盖度 —— 那会让一个历史
+    # 更长、语义不同的次优标签整体顶替主标签（审查实测: NetIncomeLoss 七年历史
+    # 压过只有两年的 ProfitLoss，全口径净利润静默变成归母口径）。
+    latest = max(set().union(*cover.values()), key=sort_key)
+    current = [t for t in tags if t in cover and latest in cover[t]]
+    best = current[0]
+    if best != tags[0] and tags[0] in cands:
+        notes.append(f"{key} 主标签取 {best}（首选 {tags[0]} 不覆盖最新期 {latest}）")
+    elif best != tags[0]:
+        notes.append(f"{key} 主标签取 {best}（首选 {tags[0]} 无数据）")
     out = list(cands[best])
     for p in sorted(set().union(*cover.values()) - cover[best]):
         t = next(t for t in tags if t in cover and p in cover[t])
@@ -201,9 +212,12 @@ class NoUsGaapFacts(Exception):
     """公司没有 us-gaap 事实（多为只报 IFRS 的外国私人发行人）。"""
 
 
-def fetch_statements_us(ticker: str, store, notes: list[str] | None = None
-                        ) -> tuple[list[Fact], dict[str, str]]:
-    """返回 (facts, {接口: source_id})，与 eastmoney.fetch_statements_em 同形状。"""
+def load_us_statements(ticker: str, store, notes: list[str] | None = None
+                       ) -> tuple[list[Fact], str, dict[str, str]]:
+    """EDGAR 取数的唯一入口：返回 (facts, 财年末 MMDD, {接口: source_id})。
+
+    解析不出美元事实就报错 —— 不能让调用方把 FMP 降级成取值主源（FMP 只用于核对）。
+    """
     info = edgar.resolve_ticker(ticker, store)
     sub, sub_sid = edgar.fetch_submissions(info.cik, store)
     fye = sub.get("fiscalYearEnd") or ""
@@ -211,6 +225,15 @@ def fetch_statements_us(ticker: str, store, notes: list[str] | None = None
         raise ValueError(f"{ticker} 的 submissions 没有财年末（fiscalYearEnd={fye!r}）。")
     doc, cf_sid = edgar.fetch_companyfacts(info.cik, store)
     if not doc.get("facts", {}).get("us-gaap"):
-        raise NoUsGaapFacts(f"{ticker}（CIK {info.cik}）没有 us-gaap 事实，可能只报 IFRS。")
+        raise NoUsGaapFacts(f"{ticker}（CIK {info.cik}）没有 us-gaap 事实，可能只报 IFRS（20-F / 40-F）。")
     facts = parse_companyfacts(doc, fye, cf_sid, notes=notes)
-    return facts, {"submissions": sub_sid, "companyfacts": cf_sid}
+    if not any(f.unit == MONEY_UNIT for f in facts):
+        raise NoUsGaapFacts(f"{ticker}（CIK {info.cik}）的 us-gaap 事实里没有以美元计的定期报告数据。")
+    return facts, fye, {"submissions": sub_sid, "companyfacts": cf_sid}
+
+
+def fetch_statements_us(ticker: str, store, notes: list[str] | None = None
+                        ) -> tuple[list[Fact], dict[str, str]]:
+    """返回 (facts, {接口: source_id})，与 eastmoney.fetch_statements_em 同形状。"""
+    facts, _fye, sids = load_us_statements(ticker, store, notes)
+    return facts, sids

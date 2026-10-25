@@ -71,6 +71,8 @@ def _parse(rows: list, fields: dict[str, str], quarterly: bool, flows: bool,
         filed, end = row.get("filingDate"), row.get("date")
         if not filed or not end:
             continue
+        if row.get("reportedCurrency", "USD") != "USD":
+            continue                                # 非美元报告（如 TSM 新台币）不能标成美元
         if quarterly and flows and row.get("period") != "Q1":
             continue                                # 单季流量只有 Q1 与累计口径相同
         period = fiscal_label(None, date.fromisoformat(end[:10]), fye_mmdd)

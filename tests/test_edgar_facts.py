@@ -165,3 +165,30 @@ def test_fetch_statements_us串起代码_财年末_事实(monkeypatch, tmp_path)
     assert set(sids) == {"submissions", "companyfacts"}
     rev = get(facts, "revenue", "2025FY")
     assert rev.value == D("416161000000") and rev.source_id == sids["companyfacts"]
+
+
+def _years(tag_from, tag_to, base):
+    return [_x(f"{y}-01-01", f"{y}-12-31", base + y, f"{y + 1}-02-14", fy=y) for y in range(tag_from, tag_to + 1)]
+
+
+def test_覆盖度按近期窗口计_历史更长的次优标签不顶替主标签():
+    # 审查 I2：ProfitLoss 只有 2024–2025，NetIncomeLoss 有 2019–2025
+    d = doc({"ProfitLoss": [_x("2024-01-01", "2024-12-31", 105, "2025-02-14", fy=2024),
+                            _x("2025-01-01", "2025-12-31", 110, "2026-02-14")],
+             "NetIncomeLoss": _years(2019, 2025, 0)})
+    fs = parse_companyfacts(d, "1231", "sid")
+    assert get(fs, "net_profit", "2025FY").value == D(110)
+
+
+def test_长期借款不取含一年内到期部分的总额标签():
+    d = doc({"LongTermDebtNoncurrent": [_x(None, "2025-12-31", 500, "2026-02-14")],
+             "LongTermDebt": [_x(None, f"{y}-12-31", 600, f"{y + 1}-02-14", fy=y) for y in range(2019, 2026)]})
+    fs = parse_companyfacts(d, "1231", "sid")
+    assert {f.value for f in fs if f.key == "long_loan"} == {D(500)}
+
+
+def test_主标签不是首选标签时留说明():
+    d = doc({"Revenues": [_x("2025-01-01", "2025-12-31", 99, "2026-02-01")]})
+    notes = []
+    parse_companyfacts(d, "1231", "sid", notes=notes)
+    assert any("revenue" in n and "Revenues" in n and "首选" in n for n in notes)

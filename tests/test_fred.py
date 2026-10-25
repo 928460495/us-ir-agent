@@ -11,15 +11,16 @@ from ir_agent.sources.snapshot import SnapshotStore
 KEY = "fredsecret"
 
 
-def _obs(rt, d, v):
-    return {"realtime_start": rt, "realtime_end": "9999-12-31", "date": d, "value": v}
+def _obs(rt, d, v, rt_end="9999-12-31"):
+    return {"realtime_start": rt, "realtime_end": rt_end, "date": d, "value": v}
 
 
-def _vintage(series, realtime):
-    """按请求的 realtime 返回当时的数据版本。GDPC1 2024Q4 初值同比 2.8%，2025-03-27 修订为 3.1%。"""
+def _vintage(series):
+    """完整的版本史（ALFRED 原貌）。GDPC1 2024Q4 初值同比 2.8%，2025-03-27 修订为 3.1%。"""
     if series == "GDPC1":
-        q4 = ("2025-01-30", "102.8") if realtime < "2025-03-27" else ("2025-03-27", "103.1")
-        return [_obs("2024-10-30", "2023-10-01", "100.0"), _obs(q4[0], "2024-10-01", q4[1])]
+        return [_obs("2024-10-30", "2023-10-01", "100.0"),
+                _obs("2025-01-30", "2024-10-01", "102.8", "2025-03-26"),
+                _obs("2025-03-27", "2024-10-01", "103.1")]
     if series == "DGS10":
         return [_obs("2025-10-22", "2025-10-21", "4.10"), _obs("2025-10-24", "2025-10-23", "4.12"),
                 _obs("2025-10-25", "2025-10-24", ".")]
@@ -28,6 +29,18 @@ def _vintage(series, realtime):
     if series == "GDP":
         return [_obs("2024-10-30", "2023-10-01", "28000.0"), _obs("2025-01-30", "2024-10-01", "29700.0")]
     return []
+
+
+def _fred_clip(rows, rs, re_):
+    """FRED 的真实行为（审查 I5）：只返回与请求窗口相交的版本，且把每条的
+    realtime_start / realtime_end 截到窗口内。"""
+    out = []
+    for o in rows:
+        if o["realtime_start"] > re_ or o["realtime_end"] < rs:
+            continue
+        out.append({**o, "realtime_start": max(o["realtime_start"], rs),
+                    "realtime_end": min(o["realtime_end"], re_)})
+    return out
 
 
 @pytest.fixture
@@ -46,7 +59,8 @@ def fake_fred(monkeypatch):
 
     def get(url, params=None, timeout=None):
         seen.append(dict(params))
-        return R({"observations": _vintage(params["series_id"], params["realtime_end"])})
+        rows = _fred_clip(_vintage(params["series_id"]), params["realtime_start"], params["realtime_end"])
+        return R({"observations": rows})
     monkeypatch.setattr(fred.requests, "get", get)
     return seen
 
@@ -68,12 +82,13 @@ def test_取当时可见的初值而非修订值(fake_fred, store):
     assert get(late, "macro.gdp_real_yoy").value == D("0.031")
 
 
-def test_请求带ALFRED时点参数(fake_fred, store):
+def test_请求窗口从最早到as_of(fake_fred, store):
     fred.fetch_series_asof("GDPC1", date(2025, 2, 1), store)
-    assert fake_fred[0]["realtime_start"] == fake_fred[0]["realtime_end"] == "2025-02-01"
+    assert fake_fred[0]["realtime_start"] == fred.REALTIME_EARLIEST
+    assert fake_fred[0]["realtime_end"] == "2025-02-01"
 
 
-def test_事实as_of取该观测的生效日(fake_fred, store):
+def test_事实as_of取该版本的真实生效日而非请求日(fake_fred, store):
     f = get(fred.fetch_series_asof("GDPC1", date(2025, 4, 1), store), "macro.gdp_real_yoy")
     assert f.as_of == date(2025, 3, 27) and f.period == "2024Q4S"
 

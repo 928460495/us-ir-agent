@@ -126,3 +126,22 @@ def test_A股代码路径不变(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="stop"):
         pipeline.run("600183", 2025, AS_OF, snapshot_dir=tmp_path)
     assert hit == ["cninfo"]
+
+
+def test_EDGAR无us_gaap事实时报错而不是让FMP当主源(fake_all, monkeypatch, tmp_path):
+    # 审查 I3：报 IFRS 的外国发行人（20-F）
+    from ir_agent.sources.edgar_facts import NoUsGaapFacts
+    monkeypatch.setattr(edgar, "fetch_companyfacts", lambda cik, store: (
+        {"cik": 320193, "facts": {"ifrs-full": {"Revenue": {"units": {"TWD": []}}}}}, "sid"))
+    with pytest.raises(NoUsGaapFacts):
+        pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+
+
+def test_us_gaap里没有美元事实时同样报错(fake_all, monkeypatch, tmp_path):
+    from ir_agent.sources.edgar_facts import NoUsGaapFacts
+    monkeypatch.setattr(edgar, "fetch_companyfacts", lambda cik, store: (
+        {"cik": 320193, "facts": {"us-gaap": {"Revenues": {"units": {"EUR": [
+            {"start": "2024-09-29", "end": "2025-09-27", "val": 1, "form": "10-K",
+             "filed": "2025-10-31", "fy": 2025, "fp": "FY"}]}}}}}, "sid"))
+    with pytest.raises(NoUsGaapFacts, match="美元"):
+        pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)

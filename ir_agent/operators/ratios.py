@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from ir_agent.ledger import Fact, FactLedger, LookAheadError
+from ir_agent.ledger import Fact, FactLedger, LookAheadError, Method
 from ir_agent.metrics import (
     BY_KEY,
     Applicability,
@@ -293,6 +293,9 @@ def compute(ledger: FactLedger, period: str, as_of: date,
 
 # ── 趋势 ──────────────────────────────────────────────────────
 
+_ACTUALS = ("revenue", "total_assets", "net_profit_attr_parent")
+
+
 def annual_periods(ledger: FactLedger, as_of: date,
                    years: int = TREND_YEARS) -> list[str]:
     """**已经结束**的最近若干个年度期间，早到晚 —— 不是预测期。
@@ -319,12 +322,19 @@ def annual_periods(ledger: FactLedger, as_of: date,
     `key@period` 直接从账本取（见 `sources/reports.py` 的
     `consensus_facts` 与 `corpus.py` 的引用），过滤掉预测期不影响它。
     """
+    # 非自然年财年（苹果截止 9 月、英伟达截止 1 月）的标签不带截止月，
+    # period_end_date 一律按 12-31 算会把刚申报的最新一年挡掉。判据补一条：
+    # 该年度已有实际报表科目的原始披露 —— 年度没结束就不可能申报年报。
+    # 一致预期（consensus.*）不是实际报表科目，预测期仍被挡住。
+    filed = {per for (key, per), fs in ledger._facts.items()     # noqa: SLF001
+             if key in _ACTUALS and per.endswith("FY")
+             and any(f.method is Method.REPORTED and f.as_of <= as_of for f in fs)}
     seen: set[str] = set()
     for key, per in ledger._facts:                       # noqa: SLF001
         if not per.endswith("FY"):
             continue
         try:
-            if period_end_date(per) > as_of:
+            if period_end_date(per) > as_of and per not in filed:
                 continue
         except UnknownPeriod:
             continue

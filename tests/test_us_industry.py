@@ -47,8 +47,12 @@ class R:
         return self._js
 
 
+SIC_LIST_BROKEN = {"on": False}
+
+
 @pytest.fixture
 def fake_sec(monkeypatch):
+    SIC_LIST_BROKEN["on"] = False
     monkeypatch.setenv("SEC_USER_AGENT", "Tester tester@example.org")
     calls = []
 
@@ -58,6 +62,10 @@ def fake_sec(monkeypatch):
             return R(js=json.loads((FIX / "company_tickers_exchange.json").read_text()))
         if "/submissions/" in url:
             return R(js=json.loads((FIX / "submissions_0000320193.json").read_text()))
+        if "standard-industrial-classification" in url:
+            if SIC_LIST_BROKEN["on"]:
+                return R(text="<html>maintenance</html>")
+            return R(text=(FIX / "sic_code_list.html").read_text())
         if "browse-edgar" in url:
             p = FIX / f"browse_sic_{params['SIC']}.html"
             if p.exists() and int(params.get("start", 0)) == 0:
@@ -81,7 +89,9 @@ def test_非主板交易所与无代码公司剔除并留原因(fake_sec, tmp_pa
     ps = us_industry.peer_set_us("AAPL", SnapshotStore(tmp_path))
     why = {code: reason for code, _name, reason in ps.excluded}
     assert "OHWC" in why and "OTC" in why["OHWC"]
-    assert "0009999999" in why
+    # 无交易代码的只给计数，不逐家列（退市空壳可能上千家，会刷屏）—— 审查 I4
+    assert not any(code == "0009999999" for code, _n, _r in ps.excluded)
+    assert any("无交易代码" in r and "1 家" in r for _c, _n, r in ps.excluded)
 
 
 def test_描述不写申万(fake_sec, tmp_path):
@@ -95,3 +105,35 @@ def test_按SIC翻页直到没有新公司(fake_sec, tmp_path):
     us_industry.companies_with_sic(3571, SnapshotStore(tmp_path))
     starts = [p.get("start") for u, p in fake_sec if p.get("SIC") == 3571]
     assert starts == [0]                                      # 首页不满一页就停
+
+
+def _browse_calls(calls):
+    return [p["SIC"] for u, p in calls if "browse-edgar" in u]
+
+
+def test_只请求SEC实际使用的SIC码(fake_sec, tmp_path):
+    us_industry.peer_set_us("AAPL", SnapshotStore(tmp_path))
+    # FF49-35 的区间展开有 21 个码，SEC 码表里只有 7 个
+    assert sorted(_browse_calls(fake_sec)) == [3570, 3571, 3572, 3575, 3576, 3577, 3578, 3579]
+
+
+def test_SIC码表抓不到时退回全区间(fake_sec, tmp_path):
+    SIC_LIST_BROKEN["on"] = True
+    us_industry.peer_set_us("AAPL", SnapshotStore(tmp_path))
+    assert len(_browse_calls(fake_sec)) == len(us_industry.sic_codes_of(35))
+
+
+def test_按SIC的公司名单有本地缓存(fake_sec, tmp_path):
+    store = SnapshotStore(tmp_path)
+    us_industry.peer_set_us("AAPL", store)
+    first = len(_browse_calls(fake_sec))
+    us_industry.peer_set_us("AAPL", store)
+    assert first > 0 and len(_browse_calls(fake_sec)) == first        # 第二次不再请求
+
+
+def test_缓存过期后重新请求(fake_sec, tmp_path, monkeypatch):
+    store = SnapshotStore(tmp_path)
+    us_industry.companies_with_sic(3571, store)
+    monkeypatch.setattr(us_industry, "CACHE_TTL_DAYS", -1)
+    us_industry.companies_with_sic(3571, store)
+    assert _browse_calls(fake_sec) == [3571, 3571]

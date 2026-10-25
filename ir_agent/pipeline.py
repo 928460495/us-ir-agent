@@ -490,7 +490,7 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
     `year` 指公司财年（苹果 FY2025 截止 2025-09-27），不是自然年。
     """
     from ir_agent.sources import edgar, fmp, us_quotes
-    from ir_agent.sources.edgar_facts import parse_companyfacts
+    from ir_agent.sources.edgar_facts import load_us_statements
 
     store = SnapshotStore(snapshot_dir)
     led = FactLedger()
@@ -499,13 +499,10 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
     warnings: list[str] = []
 
     # 1–2) 三表 → 事实。期间由起止日期 + 财年末推出；as_of = 申报日。
-    info = edgar.resolve_ticker(code, store)
     ticker = edgar.normalize_ticker(code)
-    sub, _ = edgar.fetch_submissions(info.cik, store)
-    fye = sub.get("fiscalYearEnd") or ""
-    doc, cf_sid = edgar.fetch_companyfacts(info.cik, store)
     tag_notes: list[str] = []
-    sec_facts = parse_companyfacts(doc, fye, cf_sid, notes=tag_notes)
+    # EDGAR 取不到美元事实时这里就报错，不交给 resolve 降级 —— FMP 只用于核对
+    sec_facts, fye, _ = load_us_statements(ticker, store, notes=tag_notes)
     fmp_notes: list[str] = []
     fin = resolve.resolve([
         ("edgar", lambda: sec_facts),
