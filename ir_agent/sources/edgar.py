@@ -86,6 +86,22 @@ def _get_json(url: str, source: str, store) -> tuple[dict, str]:
     return payload, sid
 
 
+def get_text(url: str, params: dict, source: str, store) -> tuple[str, str]:
+    """取 HTML 页面（如按 SIC 列公司），同样的身份与限流规则，原文落快照。"""
+    headers = sec_headers()
+
+    def once():
+        _throttle()
+        r = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
+        r.raise_for_status()
+        return r.text
+
+    text = with_retry(once)
+    sid = store.save(source=source, payload=text, url=url, fetched_at=datetime.now(),
+                     params=params)
+    return text, sid
+
+
 def load_tickers(store) -> tuple[dict[str, TickerInfo], str]:
     """全部代码 → TickerInfo。同业名单（只留有代码、在交易所上市的公司）也用这张表。"""
     doc, sid = _get_json(TICKERS_URL, "sec_tickers", store)

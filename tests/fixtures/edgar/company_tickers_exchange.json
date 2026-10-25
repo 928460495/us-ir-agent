@@ -1,12 +1,94 @@
-{"fields": ["cik", "name", "ticker", "exchange"],
+{
+ "fields": [
+  "cik",
+  "name",
+  "ticker",
+  "exchange"
+ ],
  "data": [
-  [320193, "Apple Inc.", "AAPL", "Nasdaq"],
-  [1045810, "NVIDIA CORP", "NVDA", "Nasdaq"],
-  [909832, "COSTCO WHOLESALE CORP /NEW", "COST", "Nasdaq"],
-  [18230, "CATERPILLAR INC", "CAT", "NYSE"],
-  [1067983, "BERKSHIRE HATHAWAY INC", "BRK-B", "NYSE"],
-  [1067983, "BERKSHIRE HATHAWAY INC", "BRK-A", "NYSE"],
-  [789019, "MICROSOFT CORP", "MSFT", "Nasdaq"],
-  [1999999, "SOME OTC CO", "SOTC", "OTC"],
-  [1888888, "NO EXCHANGE CO", "NOEX", null]
- ]}
+  [
+   320193,
+   "Apple Inc.",
+   "AAPL",
+   "Nasdaq"
+  ],
+  [
+   1045810,
+   "NVIDIA CORP",
+   "NVDA",
+   "Nasdaq"
+  ],
+  [
+   909832,
+   "COSTCO WHOLESALE CORP /NEW",
+   "COST",
+   "Nasdaq"
+  ],
+  [
+   18230,
+   "CATERPILLAR INC",
+   "CAT",
+   "NYSE"
+  ],
+  [
+   1067983,
+   "BERKSHIRE HATHAWAY INC",
+   "BRK-B",
+   "NYSE"
+  ],
+  [
+   1067983,
+   "BERKSHIRE HATHAWAY INC",
+   "BRK-A",
+   "NYSE"
+  ],
+  [
+   789019,
+   "MICROSOFT CORP",
+   "MSFT",
+   "Nasdaq"
+  ],
+  [
+   1999999,
+   "SOME OTC CO",
+   "SOTC",
+   "OTC"
+  ],
+  [
+   1888888,
+   "NO EXCHANGE CO",
+   "NOEX",
+   null
+  ],
+  [
+   1571996,
+   "Dell Technologies Inc.",
+   "DELL",
+   "NYSE"
+  ],
+  [
+   47217,
+   "HP INC",
+   "HPQ",
+   "NYSE"
+  ],
+  [
+   1375365,
+   "Super Micro Computer, Inc.",
+   "SMCI",
+   "Nasdaq"
+  ],
+  [
+   1650000,
+   "FAKE HARDWARE CO",
+   "FHWC",
+   "Nasdaq"
+  ],
+  [
+   1650001,
+   "OTC HARDWARE CO",
+   "OHWC",
+   "OTC"
+  ]
+ ]
+}
