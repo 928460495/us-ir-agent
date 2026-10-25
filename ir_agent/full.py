@@ -498,6 +498,7 @@ def _load_announce(code: str, r, as_of: date, out: Path,
 
     if r.corpus is None:
         r.corpus = Corpus(as_of=as_of)
+    us_notes: list[str] = []
     try:
         if is_us(code):
             # 美股：8-K（业绩新闻稿 EX-99.1 与实质事项）。submissions 在取数时已落快照
@@ -505,6 +506,15 @@ def _load_announce(code: str, r, as_of: date, out: Path,
             sub = r.store.load(r.sec_meta["submissions_sid"]).payload
             res = gather_us(sub=sub, as_of=as_of, corpus=r.corpus, store=r.store,
                             company=sub.get("name") or code)
+            # 电话会纪要（defeatbeta 转存）一并放进公告结果，随之落盘、第二阶段读回
+            from ir_agent.sources.transcripts import fetch_transcripts
+            calls, call_err = fetch_transcripts(code, as_of, r.store)
+            for d in calls:
+                if r.corpus.add_if_visible(d):
+                    res.docs.append(d)
+                    res.picked += 1
+            if call_err:
+                us_notes.append(call_err)
         else:
             res = announce.gather(code=code, company=_company_name(code),
                                   as_of=as_of, corpus=r.corpus,
@@ -512,7 +522,7 @@ def _load_announce(code: str, r, as_of: date, out: Path,
     except Exception as e:                                  # noqa: BLE001
         return [f"公司公告采集未执行（{e.__class__.__name__}: {str(e)[:120]}）"]
 
-    skipped: list[str] = []
+    skipped: list[str] = list(us_notes)
     try:
         announce.save(res, out / announce.ANNOUNCE_JSON)
     except Exception as e:                                  # noqa: BLE001

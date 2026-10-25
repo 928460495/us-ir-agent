@@ -44,3 +44,9 @@ def test_苹果近一年业绩8K至少四份(store):
     earnings = [d for d in res.docs if "业绩发布" in d.title]
     assert len(earnings) >= 4 and all("Apple" in d.text[:2000] for d in earnings)
     assert res.fetch_failed == 0
+
+
+def test_苹果电话会纪要取到两篇(store):
+    from ir_agent.sources.transcripts import fetch_transcripts
+    docs, err = fetch_transcripts("AAPL", TODAY, store)
+    assert err == "" and len(docs) == 2 and all(len(d.text) > 10000 for d in docs)

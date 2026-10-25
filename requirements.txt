@@ -9,3 +9,4 @@ numpy>=2.1,<3
 akshare>=1.18
 formulas>=1.2,<2
 scipy>=1.11,<2          # 相对估值回归的 t 分位；此前只作为 formulas 的传递依赖被装上
+duckdb>=1.1,<3          # 美股：远程读 defeatbeta 的电话会纪要 parquet（只拉目标股票所在的数据块）

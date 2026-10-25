@@ -96,8 +96,29 @@ def test_美股公告走8K且不碰巨潮(fake, monkeypatch, tmp_path):
     store = SnapshotStore(tmp_path / "snap")
     from datetime import datetime
     sid = store.save(source="sec_submissions", payload=_sub([EARN, VOTE]), url="u", fetched_at=datetime.now())
+    from ir_agent.sources import transcripts
+    from ir_agent.sources.external import Document
+    call = Document(doc_id="defeatbeta_AAPL_2026Q3", url="u", title="FY2026 Q3 业绩电话会纪要",
+                    publisher=transcripts.PUBLISHER, tier=Tier.COMPANY, published=date(2026, 7, 30),
+                    retrieved=AS_OF, text="Tim Cook: hello")
+    monkeypatch.setattr(transcripts, "fetch_transcripts", lambda t, as_of, store: ([call], ""))
     r = SimpleNamespace(code="AAPL", corpus=None, store=store, sec_meta={"submissions_sid": sid})
     md = {}
     notes = full._load_announce("AAPL", r, AS_OF, tmp_path, md)
-    assert len(r.corpus.docs) == 1 and "公司公告 1 篇" in md["公司公告"]
-    assert (tmp_path / announce.ANNOUNCE_JSON).exists() and notes == []
+    assert [d.doc_id for d in r.corpus.docs] == ["sec8k_0000320193-26-000018", "defeatbeta_AAPL_2026Q3"]
+    back = announce.load(tmp_path / announce.ANNOUNCE_JSON, Corpus(as_of=AS_OF))
+    assert len(back.docs) == 2 and notes == []
+
+
+def test_纪要取不到时记一条说明不中断(fake, monkeypatch, tmp_path):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from ir_agent import full
+    from ir_agent.sources import transcripts
+    monkeypatch.setattr(transcripts, "fetch_transcripts",
+                        lambda t, as_of, store: ([], "电话会纪要（defeatbeta 不可达：OSError）"))
+    store = SnapshotStore(tmp_path / "snap")
+    sid = store.save(source="sec_submissions", payload=_sub([EARN]), url="u", fetched_at=datetime.now())
+    r = SimpleNamespace(code="AAPL", corpus=None, store=store, sec_meta={"submissions_sid": sid})
+    notes = full._load_announce("AAPL", r, AS_OF, tmp_path, {})
+    assert len(r.corpus.docs) == 1 and any("defeatbeta 不可达" in n for n in notes)
