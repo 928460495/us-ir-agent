@@ -107,3 +107,42 @@ def fetch_statements_fmp(ticker: str, store, fye_mmdd: str,
     if notes is not None:
         notes.extend(errors)
     return facts
+
+
+CONSENSUS_MAX_LAG_DAYS = 3      # FMP 只给当前快照：分析时点距今超过这么多天就拿不到「当时」的预期
+
+
+def fetch_consensus(ticker: str, fye_mmdd: str, as_of: date, store,
+                    today: date | None = None):
+    """FMP 分析师预期 → reports.Consensus（统计量为均值）。取不到返回 None。
+
+    时点守卫：FMP 只给**当前**的预期。回测时点（as_of 距今超过三天）拿到的是未来才形成的
+    预期，宁可没有。单人覆盖的年份不收 —— 与 A 股「单家券商不构成一致预期」同一规则。
+    """
+    from datetime import timedelta
+
+    from ir_agent.sources.reports import Consensus, Estimate
+
+    if as_of < (today or date.today()) - timedelta(days=CONSENSUS_MAX_LAG_DAYS):
+        return None
+    try:
+        rows, _sid = _get("analyst-estimates", ticker, "annual", _key(), store)
+    except FmpUnavailable:
+        return None
+    eps: dict[int, Estimate] = {}
+    for row in rows:
+        n = int(row.get("numAnalystsEps") or 0)
+        if n < 2 or row.get("epsAvg") is None or not row.get("date"):
+            continue
+        label = fiscal_label(None, date.fromisoformat(row["date"][:10]), fye_mmdd)
+        if label is None:
+            continue
+        y = int(label[:4])
+        eps[y] = Estimate(fiscal_year=y, n=n, median=Decimal(str(row["epsAvg"])),
+                          low=Decimal(str(row.get("epsLow", row["epsAvg"]))),
+                          high=Decimal(str(row.get("epsHigh", row["epsAvg"]))))
+    if not eps:
+        return None
+    return Consensus(as_of=as_of, window_days=0, eps=eps, n_reports=0, stat="均值",
+                     provider="FMP 分析师预期，统计量为均值；分析时点的快照")
+

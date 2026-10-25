@@ -50,3 +50,12 @@ def test_苹果电话会纪要取到两篇(store):
     from ir_agent.sources.transcripts import fetch_transcripts
     docs, err = fetch_transcripts("AAPL", TODAY, store)
     assert err == "" and len(docs) == 2 and all(len(d.text) > 10000 for d in docs)
+
+
+def test_苹果一致预期至少两个财年_CAT不可用(store):
+    from ir_agent.sources import fmp
+    if not os.environ.get("FMP_API_KEY"):
+        pytest.skip("未设置 FMP_API_KEY")
+    c = fmp.fetch_consensus("AAPL", "0927", TODAY, store)
+    assert c is not None and len(c.eps) >= 2 and all(e.n >= 2 for e in c.eps.values())
+    assert fmp.fetch_consensus("CAT", "1231", TODAY, store) is None

@@ -255,6 +255,9 @@ class Consensus:
     n_reports: int = 0
     # 同一财年在更早时点的预期，用于看下修/上修轨迹
     drift: dict[int, tuple[Estimate, Estimate]] = field(default_factory=dict)
+    # 统计量与来源。A 股是研报中位数（provider 空 = 东财研报）；美股 FMP 给的是均值
+    stat: str = "中位"
+    provider: str = ""
 
     def has_data(self) -> bool:
         return bool(self.eps)
@@ -345,7 +348,7 @@ def industry_code_of(reports: list[Report]) -> tuple[str, str]:
 CONSENSUS_PREFIX = "consensus."
 
 
-def consensus_facts(c: Consensus, source_id: str = "eastmoney_report"):
+def consensus_facts(c: Consensus, source_id: str = "eastmoney_report", money_unit: str = "元"):
     """一致预期落账本，好让正文能用占位符引用它。
 
     **不落账本就没法在正文里提。** 提示词里出现裸数字、正文里却禁止引用，
@@ -370,9 +373,9 @@ def consensus_facts(c: Consensus, source_id: str = "eastmoney_report"):
         p = f"{y}FY"
         # 单位用渲染器认得的「元」「家」—— 原先写死 currency / count，研报里原样
         # 出现「2.87 currency」「9 count」（所有公司都中）
-        put("consensus.eps", e.median, "元", p)
-        put("consensus.eps_low", e.low, "元", p)
-        put("consensus.eps_high", e.high, "元", p)
+        put("consensus.eps", e.median, money_unit, p)
+        put("consensus.eps_low", e.low, money_unit, p)
+        put("consensus.eps_high", e.high, money_unit, p)
         put("consensus.brokers", e.n, "家", p)
     for y, (prev, now) in c.drift.items():
         if prev.median:

@@ -110,12 +110,14 @@ def consensus_prompt(c: R.Consensus | None) -> str:
     if c is None or not c.has_data():
         return ("一致预期：本次未取到足够的券商盈利预测"
                 "（多数 A 股公司无券商跟踪）—— 无从对照")
-    lines = ["一致预期（窗口内若干篇研报，覆盖若干家券商）",
+    head = (f"一致预期（{c.provider}）" if c.provider
+            else "一致预期（窗口内若干篇研报，覆盖若干家券商）")
+    lines = [head,
              "  ⚠ 卖方预测仅作本报告结论的**对照**，"
              "不得作为本报告任何假设的依据。"]
     for y in sorted(c.eps):
         lines.append(
-            f"  FY{y}　EPS 中位 [[consensus.eps@{y}FY]]"
+            f"  FY{y}　EPS {c.stat} [[consensus.eps@{y}FY]]"
             f"（覆盖 [[consensus.brokers@{y}FY]]，区间 "
             f"[[consensus.eps_low@{y}FY]]~[[consensus.eps_high@{y}FY]]）")
     for y in sorted(c.drift):
@@ -133,11 +135,13 @@ def consensus_md(c: R.Consensus | None) -> str:
     if c is None or not c.has_data():
         return ("一致预期：本次未取到足够的券商盈利预测"
                 "（多数 A 股公司无券商跟踪）—— 无从对照")
-    lines = [f"一致预期（近 {c.window_days} 天 {c.n_reports} 篇研报）",
+    head = (f"一致预期（{c.provider}）" if c.provider
+            else f"一致预期（近 {c.window_days} 天 {c.n_reports} 篇研报）")
+    lines = [head,
              "  ⚠ 卖方预测仅作本报告结论的**对照**，"
              "不得作为本报告任何假设的依据。"]
     for y, e in sorted(c.eps.items()):
-        lines.append(f"  FY{y} EPS 中位 {e.median}（{e.n} 家，"
+        lines.append(f"  FY{y} EPS {c.stat} {e.median}（{e.n} 家，"
                      f"区间 {e.low}~{e.high}，离散 {e.spread:.0%}）")
     for y, (prev, now) in sorted(c.drift.items()):
         if prev.median:

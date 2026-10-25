@@ -108,7 +108,10 @@ def _load_external(code: str, r, as_of: date) -> tuple[str, str, str]:
     不静默降级: 读者会以为那些判断有外部印证。
     """
     from ir_agent import corpus as C
+    from ir_agent.market import is_us
 
+    if is_us(code):
+        return _load_external_us(code, r, as_of)
     try:
         cp, cs = C.gather(as_of=as_of, code=code)
     except Exception as e:                                  # noqa: BLE001
@@ -137,6 +140,29 @@ def _load_external(code: str, r, as_of: date) -> tuple[str, str, str]:
         prompt = "" if not cp.docs else C.consensus_prompt(cs)
         return md, prompt, "外部资料（" + "；".join(notes) + "）"
     return md, C.consensus_prompt(cs), ""
+
+
+def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
+    """美股的外部资料：FMP 一致预期入账（不取研报 —— 免费渠道没有卖方研报正文）。"""
+    from ir_agent import corpus as C
+    from ir_agent.sources import fmp
+    from ir_agent.sources.external import Corpus
+    from ir_agent.sources.reports import consensus_facts
+
+    if r.corpus is None:
+        r.corpus = Corpus(as_of=as_of)
+    fye = r.store.load(r.sec_meta["submissions_sid"]).payload.get("fiscalYearEnd") or ""
+    cs = fmp.fetch_consensus(code, fye, as_of, r.store) if len(fye) == 4 else None
+    r.consensus = cs
+    notes: list[str] = []
+    if cs is None:
+        notes.append("一致预期不可用（FMP 免费档范围外、或分析时点早于今天而拿不到当时的预期）")
+    else:
+        for f in consensus_facts(cs, source_id="fmp_analyst_estimates", money_unit="美元"):
+            r.ledger.put(f)
+    md = C.consensus_md(cs) if cs is not None else "一致预期：不可用"
+    prompt = C.consensus_prompt(cs) if cs is not None else ""
+    return md, prompt, ("外部资料（" + "；".join(notes) + "）") if notes else ""
 
 
 def _company_name(code: str) -> str:
