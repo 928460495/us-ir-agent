@@ -138,6 +138,9 @@ def tier_of_url(url: str) -> Tier:
         return Tier.MEDIA
     if _matches(host, "gov.cn"):
         return Tier.OFFICIAL
+    # .gov 与 .gov.cn 同理：受管制注册后缀，只发给美国政府机构（BLS、BEA、Census、美联储……）
+    if _matches(host, "gov"):
+        return Tier.OFFICIAL
     for entry in _SELLSIDE_HOSTS:
         if _matches(host, entry):
             return Tier.SELLSIDE

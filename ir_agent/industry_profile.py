@@ -367,7 +367,10 @@ def dol(led: FactLedger, period: str, as_of: date) -> Decimal | None:
         return None                       # 亏损公司的 DOL 无意义
     fixed = Decimal(0)
     got = False
-    for k in ("admin_expense", "rd_expense", "depreciation_amortization"):
+    # 美股多只报合并的 SG&A（销售及管理费用）。缺管理费用时以它代替 —— 含销售费用，
+    # 固定成本因此偏高、DOL 偏大；比因缺一项就整个算不出更有用，偏差方向是已知的。
+    admin = "admin_expense" if _get(led, "admin_expense", period, as_of) is not None else "sga_expense"
+    for k in (admin, "rd_expense", "depreciation_amortization"):
         v = _get(led, k, period, as_of)
         if v is not None:
             fixed += abs(v)

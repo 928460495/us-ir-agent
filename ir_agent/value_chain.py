@@ -118,6 +118,8 @@ class ChainView:
     read_notes: list[str] = field(default_factory=list)
     review: object = None
     rounds: list = field(default_factory=list)
+    # 行业规模缺外部口径时，上市公司合计的范围（美股由加载处改写）
+    market_scope: str = "A 股同行业上市公司合计"
 
     def of(self, role: Role) -> list[Link]:
         return [x for x in self.links if x.role is role]
@@ -138,7 +140,7 @@ class ChainView:
                          f"（{self.size.period}，来源见依据）")
         else:
             lines.append("  行业规模：外部资料未给出真实口径规模 —— "
-                         "本报告的行业规模仅为 A 股同行业上市公司合计，"
+                         f"本报告的行业规模仅为 {self.market_scope}，"
                          "非上市企业未计入，据此算出的市占率系高估")
         for c in self.conflicts:
             lines.append(f"  ⚠ {c}")

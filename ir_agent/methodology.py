@@ -343,7 +343,7 @@ def _slug(label: str) -> str:
     return "f_" + cleaned
 
 
-PROMPT = """你正在为一份 A 股公司研究报告做**方法论预研**。
+PROMPT = """你正在为一份 {market}公司研究报告做**方法论预研**。
 
 标的行业：{industry}　标的代码：{code}
 {context}
@@ -523,7 +523,10 @@ def build_prompt(industry: str, code: str, *, facts: str = "",
         blocks.append(f"【多空平衡点】\n{stance_note}")
     if available_keys:
         blocks.append("【账本里已有的 key】\n" + "、".join(available_keys))
+    from ir_agent.market import is_us
+
     return PROMPT.format(industry=industry, code=code,
+                         market="美股" if is_us(code) else "A 股",
                          context=("\n" + "\n\n".join(blocks) + "\n"
                                   if blocks else ""))
 

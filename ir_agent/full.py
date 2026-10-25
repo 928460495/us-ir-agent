@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import functools
+
 import json
 import re
 import sys
@@ -171,8 +173,27 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     return md, prompt, ("外部资料（" + "；".join(notes) + "）") if notes else ""
 
 
+@functools.lru_cache(maxsize=32)
+def _us_meta(code: str) -> tuple[str, str]:
+    """美股：(SEC 登记的公司名, SIC)。一次运行里几处都要用，缓存。"""
+    from ir_agent.sources import edgar
+    from ir_agent.sources.snapshot import SnapshotStore
+
+    store = SnapshotStore("snapshots")
+    info = edgar.resolve_ticker(code, store)
+    sub, _ = edgar.fetch_submissions(info.cik, store)
+    return info.name, str(sub.get("sic") or "")
+
+
 def _company_name(code: str) -> str:
     """公司简称。取不到就退回代码 —— 搜索提示词里写代码也能用。"""
+    from ir_agent.market import is_us
+
+    if is_us(code):
+        try:
+            return _us_meta(code)[0]
+        except Exception:                                   # noqa: BLE001
+            return code
     try:
         from ir_agent.sources.taxonomy import fetch_all
         rows = fetch_all()
@@ -709,6 +730,9 @@ def _load_value_chain(r, as_of: date, client, *, out: Path | None = None,
         if sink is not None:
             sink.append(st)
     view.conflicts = VC.cross_check(view, r.ledger, r.period, as_of)
+    from ir_agent.market import is_us
+    if is_us(getattr(r, "code", "") or "000000"):
+        view.market_scope = "同一 Fama-French 行业的美国上市公司合计"
     if view.size:
         r.ledger.put(view.size.to_fact(
             r.corpus.docs[0].doc_id if r.corpus and r.corpus.docs else "ext",
@@ -1149,7 +1173,19 @@ def _industry_path(code: str) -> str:
     预研先跑完。预研挪到辩论① 之后以后，那条依赖会让 `industry=` 恒为
     空串。它本来就不该经过模型 —— `_research_methodology` 自己也是这么
     拿的（`taxonomy.fetch_all()` 的 `me.path`）。
+
+    美股：SIC → Fama-French 49 行业（只查分类，不枚举同业）。
     """
+    from ir_agent.market import is_us
+
+    if is_us(code):
+        from ir_agent.sources.us_industry import ff49_of
+        try:
+            sic = _us_meta(code)[1]
+            hit = ff49_of(int(sic)) if sic.isdigit() else None
+        except Exception:                                   # noqa: BLE001
+            return ""
+        return f"FF49-{hit[0]} {hit[1]}" if hit else ""
     try:
         from ir_agent.sources.taxonomy import fetch_all
         rows = fetch_all()
@@ -1165,6 +1201,16 @@ def _peer_names(code: str) -> tuple[str, ...]:
     分析中信证券这类券商时，正文本来就会反复出现「中信证券」——
     若因为语料库里没有中信证券的研报就判它捏造出处，那是把正当用法误伤。
     """
+    from ir_agent.market import is_us
+
+    if is_us(code):
+        from ir_agent.sources.snapshot import SnapshotStore
+        from ir_agent.sources.us_industry import peer_set_us
+        try:
+            ps = peer_set_us(code, SnapshotStore("snapshots"))
+        except Exception:                                   # noqa: BLE001
+            return ()
+        return (ps.target_name,) + tuple(m.name for m in ps.members)
     try:
         from ir_agent.sources.taxonomy import fetch_all
         rows = fetch_all()
