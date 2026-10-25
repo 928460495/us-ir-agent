@@ -150,11 +150,14 @@ def build(cal: dict, path: str) -> dict:
     ws.cell(r, 6, "历史参考").font = F_COL; ws.cell(r, 6).fill = P_B; r += 1
     gs, gms = JU["g_stats"], JU["gm_stats"]
 
-    def band(r0, rows, vals, fmt, hist):
+    def band(r0, rows, vals, fmt, hist, scen=None):
+        """scen：上游（ir-agent 的 assume.apply_to）给出的三档 {"bull","base","bear"}；
+        没有时三档同值（模板原样，提示使用者自行拉开）。列序 B=Bull C=Base D=Bear。"""
         for i, y in enumerate(rows):
             ws.cell(r0 + i, 1, y).font = Font(size=10); ws.cell(r0 + i, 1).border = BX
+            v3 = [scen[k][i] for k in ("bull", "base", "bear")] if scen else [vals[i]] * 3
             for j in range(3):
-                cc = ws.cell(r0 + i, 2 + j, vals[i]); cc.font = F_IN
+                cc = ws.cell(r0 + i, 2 + j, v3[j]); cc.font = F_IN
                 cc.number_format = fmt; cc.fill = P_Y
             cc = ws.cell(r0 + i, 5, f"=CHOOSE($B${SCEN},B{r0+i},C{r0+i},D{r0+i})")
             cc.font = F_FX; cc.number_format = fmt
@@ -164,11 +167,13 @@ def build(cal: dict, path: str) -> dict:
 
     G_ROW = r
     r = band(r, [f"{y} 营收增速" for y in YE], JU["growth"], PCT,
-             f"历史 {'／'.join(f'{x:.1%}' for x in JU['g_hist'])}｜均值 {gs[0]:.1%} 标准差 {gs[1]:.1%}")
+             f"历史 {'／'.join(f'{x:.1%}' for x in JU['g_hist'])}｜均值 {gs[0]:.1%} 标准差 {gs[1]:.1%}",
+             JU.get("growth_scen"))
     r += 1
     M_ROW = r
     r = band(r, [f"{y} 毛利率" for y in YE], JU["gm"], PCT,
-             f"历史 {'／'.join(f'{x:.1%}' for x in JU['gm_hist'])}｜近3年均值 {gms[0]:.1%}")
+             f"历史 {'／'.join(f'{x:.1%}' for x in JU['gm_hist'])}｜近3年均值 {gms[0]:.1%}",
+             JU.get("gm_scen"))
     r += 1
     CX_ROW = r
     r = band(r, [f"{y} 资本开支 / 营收" for y in YE], JU["capex"], PCT,

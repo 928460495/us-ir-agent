@@ -68,16 +68,26 @@ def _fade(g0: float, g_term: float, n: int, fade_n: int | None = None) -> list[f
     return head + [round(g_term, 4)] * (n - fade_n)
 
 
-def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None) -> dict:
+def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
+              stmts: dict | None = None, quote: dict | None = None,
+              px: pd.DataFrame | None = None, mkt: pd.DataFrame | None = None) -> dict:
+    """校准。上游（ir-agent）可注入数据，注入的部分不再自行取数：
+
+    - stmts：与 `D.statements` 同形状的报表（事实账本供数，分析层与估值层同源）；
+    - quote：`dict(source, price)`（账本里的现价，FMP → Tiingo）；
+    - px / mkt：个股与标普 500 的日线收盘（列名 Close，索引为日期），β 回归用。
+
+    独立使用时仍走 yfinance → Stooq（Stooq 现为 JS 验证页，yfinance 需另装）。
+    """
     meta = D.resolve(symbol)
     D.assert_non_financial(meta)
     g = D.facts(meta["cik"])
-    st = D.statements(g, meta["ticker"], nyears)
+    st = stmts if stmts is not None else D.statements(g, meta["ticker"], nyears)
     inc, bal, cfs, shr = st["income"], st["balance"], st["cashflow"], st["shares"]
     ends = st["ends"]
     last = ends[-1]
 
-    q = D.quote(meta["ticker"])
+    q = quote if quote is not None else D.quote(meta["ticker"])
     sh_dei = D.shares_outstanding(meta["cik"])
     shares = sh_dei if np.isfinite(sh_dei) else q.get("shares", np.nan)
     if not np.isfinite(shares):
@@ -88,7 +98,8 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None) -> di
     erp_i = D.damodaran_erp()          # 市场隐含 ERP，每月更新
     itm = D.interim_block(g, ends)     # 年报之后已披露的季度（中期锚定用）
     geo = D.geo_weighted_erp(symbol, erp_i["erp"])   # 收入地域加权 ERP
-    px, mkt = D.prices(meta["ticker"]), D.index_prices()
+    px = px if px is not None else D.prices(meta["ticker"])
+    mkt = mkt if mkt is not None else D.index_prices()
     beta5, raw5, n5 = _beta(px, mkt, 5)
     beta2, raw2, n2 = _beta(px, mkt, 2)
 
