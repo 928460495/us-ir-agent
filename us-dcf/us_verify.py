@@ -104,11 +104,27 @@ def read_inputs(path: str) -> dict:
     dg = float(g("全期营收增速 Δ")); dm = float(g("全期毛利率 Δ"))
     it = None
     try:
-        it = dict(sw=float(g("锚定开关")), share=float(g("已披露期占全年营收比重")),
-                  gm_rest=float(g("剩余期毛利率")), rev=float(g("已披露期营业收入（实际）")),
-                  cogs=float(g("已披露期营业成本（实际）")))
+        sw = float(g("锚定开关"))
     except KeyError:
-        pass
+        sw = None
+    if sw is not None:
+        # 首年锚定：读出各季**输入**，用与建表同一条规则函数独立重算（不读工作簿的公式结果）
+        from us_calibrate import quarterly_estimate
+
+        def quarters(who, name, n):
+            out = []
+            for i in range(1, n + 1):
+                try:
+                    out.append(float(g(f"{who}第{i}季{name}")))
+                except KeyError:
+                    break
+            return out
+        cur_r, cur_c = quarters("本年", "营业收入", 3), quarters("本年", "营业成本", 3)
+        prev_r, prev_c = quarters("去年", "营业收入", 4), quarters("去年", "营业成本", 4)
+        q, _why = quarterly_estimate(prev_r, prev_c, cur_r, cur_c)
+        if q:
+            it = dict(sw=sw, k=q["k"], rev=sum(cur_r), cogs=sum(cur_c),
+                      fy_rev=q["fy_rev"], fy_cogs=q["fy_cogs"])
     return dict(hdr=hdr, nh=nh, ny=ny, o=o, gen=gen, dcf=dcf, fin=fin, dg=dg, dm=dm, it=it,
                 growth=[x + dg for x in path3("营收增速", ny)],
                 gm=[x + dm for x in path3("毛利率", ny)],
@@ -129,10 +145,9 @@ def recompute(inp: dict):
     rev = src["基期营业收入"]; rows = []
     growth = list(inp["growth"]); gmp = list(inp["gm"])
     IT = inp.get("it")
-    if IT and IT["sw"] == 1 and IT["share"]:
-        # 锚定：首年生效增速/毛利率由已披露季度反推（与「1_Assumptions」生效值列一致）
-        fy_rev = IT["rev"] / IT["share"]
-        fy_cogs = IT["cogs"] + (fy_rev - IT["rev"]) * (1 - IT["gm_rest"])
+    if IT and IT["sw"] == 1 and IT.get("fy_rev"):
+        # 锚定：首年生效增速/毛利率由已披露季度按年初至今同比外推（与「1_Assumptions」生效值列一致）
+        fy_rev, fy_cogs = IT["fy_rev"], IT["fy_cogs"]
         growth[0] = fy_rev / src["基期营业收入"] - 1
         gmp[0] = 1 - fy_cogs / fy_rev
     for i in range(ny):

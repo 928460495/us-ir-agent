@@ -68,6 +68,63 @@ def _fade(g0: float, g_term: float, n: int, fade_n: int | None = None) -> list[f
     return head + [round(g_term, 4)] * (n - fade_n)
 
 
+# 首年按季度锚定的规则 —— 自 ashare_calibrate 原样移植（只换科目名与金额单位），
+# 两个引擎同一条规则。
+G_RANGE = (-0.75, 2.0)   # 年初至今同比的合理范围（用户决定，2026-10-19）
+
+
+def quarterly_estimate(prev_rev, prev_cogs, cur_rev, cur_cogs) -> tuple[dict | None, str]:
+    """首个预测年按季度估算。返回 (估算, 不锚定的原因)；能估算时原因为空串。
+
+    **规则只在这里定义一份**：工作簿第三小节用活公式实现同一规则，us_verify
+    独立重算，ir-agent 只读本函数写进中期块的结果。
+
+    - 已公布的季度用实际；
+    - 未公布的季度 = 去年同季 × (1 + 本年已公布季度的年初至今同比)，营收与营业
+      成本**各用各的同比**（保留各自的季节性）；
+    - 首年三档相同：它是实际 + 机械外推，不是判断，情景分化从第 2 年开始。
+
+    取代此前的「已披露 ÷ 近几年同期占比（最小/均值/最大）」三档锚定（2026-10-18，
+    用户决定）。旧规则对周期股失灵：牧原股份近 4 年上半年占比 0.355～0.530，用
+    均值 0.44 反推全年营收约 1346 百万美元，按三季度销售简报推算只有约 1185 百万美元，
+    高估 13.6%，且首年是后续年份复合的基数。
+
+    **不锚定**（首年回到增速判断项）的情形，原因如实写出：
+    - 本年没有已公布季度；去年任一季度、本年任一已公布季度缺数据；
+    - 参与计算的任一季度不为正（终审 2026-10-19：报表追溯重述后「全年 − 前三季」
+      可能为负，外推出负的季度营收）；
+    - 营收或营业成本的年初至今同比超出 `G_RANGE`（去年同季基数极小时同比可达
+      +9900%，全年营收凭空膨胀几十倍）。
+
+    `prev_*`：去年四个单季；`cur_*`：本年已公布的 k 个单季（1 ≤ k ≤ 3）。
+    """
+    k = len(cur_rev)
+    if not 1 <= k <= 3 or len(cur_cogs) != k:
+        return None, "本年没有已公布的季度"
+    if len(prev_rev) != 4 or len(prev_cogs) != 4:
+        return None, "去年季度数据不全"
+    for who, rows in (("去年", (("营业收入", prev_rev), ("营业成本", prev_cogs))),
+                      ("本年", (("营业收入", cur_rev), ("营业成本", cur_cogs)))):
+        for item, seq in rows:
+            for i, x in enumerate(seq):
+                if x is None:
+                    return None, f"{who} Q{i + 1} {item}缺失"
+                if x <= 0:
+                    return None, f"{who} Q{i + 1} {item}不为正（{x:.2f} 百万美元）"
+    g_rev = sum(cur_rev) / sum(prev_rev[:k]) - 1
+    g_cogs = sum(cur_cogs) / sum(prev_cogs[:k]) - 1
+    lo, hi = G_RANGE
+    for item, g in (("营收", g_rev), ("营业成本", g_cogs)):
+        if not lo <= g <= hi:
+            return None, (f"{item}年初至今同比 {g:+.1%} 超出 {lo:.0%}～+{hi:.0%} 的合理范围"
+                          "（去年同季基数过小或数据异常）")
+    est_rev = list(cur_rev) + [x * (1 + g_rev) for x in prev_rev[k:]]
+    est_cogs = list(cur_cogs) + [x * (1 + g_cogs) for x in prev_cogs[k:]]
+    return dict(k=k, g_rev=g_rev, g_cogs=g_cogs, est_rev=est_rev, est_cogs=est_cogs,
+                fy_rev=sum(est_rev), fy_cogs=sum(est_cogs)), ""
+
+
+
 def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
               stmts: dict | None = None, quote: dict | None = None,
               px: pd.DataFrame | None = None, mkt: pd.DataFrame | None = None) -> dict:
@@ -97,6 +154,16 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
     rf, rfd = D.riskfree()
     erp_i = D.damodaran_erp()          # 市场隐含 ERP，每月更新
     itm = D.interim_block(g, ends)     # 年报之后已披露的季度（中期锚定用）
+    itm_skip = None
+    if itm:
+        qe, itm_skip = quarterly_estimate(itm["q_prev_rev"], itm["q_prev_cogs"],
+                                          itm["q_cur_rev"], itm["q_cur_cogs"])
+        if qe:          # 不能叫 q —— q 是上面的行情
+            itm.update(k=qe["k"], g_rev=qe["g_rev"], g_cogs=qe["g_cogs"], est_rev=qe["est_rev"],
+                       est_cogs=qe["est_cogs"], fy_rev=qe["fy_rev"], fy_cogs=qe["fy_cogs"])
+            itm_skip = None
+        else:
+            itm["fy_rev"] = itm["fy_cogs"] = None
     geo = D.geo_weighted_erp(symbol, erp_i["erp"])   # 收入地域加权 ERP
     px = px if px is not None else D.prices(meta["ticker"])
     mkt = mkt if mkt is not None else D.index_prices()
@@ -294,7 +361,7 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
         rdcap=dict(**rdcap, rd_hist=[round(_rd_all[k], 1) for k in sorted(_rd_all)][-8:],
                    ic_reported=round(ic["operating"], 1), ic_financing=round(ic["financing"], 1),
                    ic_gap=ic["gap"], ic_rdcap=round(o["ic_rdcap"], 1)),
-        erp_info=erp_i, interim=itm, geo=geo,
+        erp_info=erp_i, interim=itm, interim_skip=itm_skip, geo=geo,
         course=dict(z=kdinfo["z"], zone=kdinfo["zone"], rating=kdinfo["rating"],
                     z_terms=zdec.get("terms"), z_d_share=zdec.get("d_share"),
                     kd_wacc_bp=round(VL.wacc_sensitivity_to_kd(wd, taxr) * 10000, 2),

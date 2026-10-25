@@ -765,6 +765,15 @@ def _quarter_facts(g: dict, tags: list[str]) -> dict:
     return {k: v[0] for k, v in out.items()}
 
 
+def single_quarters_for(q_prev: list, fy_prev, q_cur: list) -> tuple[list, list]:
+    """首年锚定用的单季序列：去年四季（Q4 = 全年 − 前三季 —— 公司不为第四季度单报 10-Q）、
+    本年已公布的 1–3 季。本年已满四季说明新年报应已发布，不再用季报反推全年。"""
+    if len(q_cur) >= 4:
+        raise ValueError("本年已披露满四个季度 —— 新年报应已发布，不用季报反推全年")
+    q4 = (fy_prev - sum(q_prev)) if fy_prev is not None and len(q_prev) == 3 and None not in q_prev else None
+    return list(q_prev) + [q4], list(q_cur)
+
+
 def interim_block(g: dict, ends: list[str]) -> dict | None:
     """年报之后的已披露季度 + 历史同期占全年比重。取不到返回 None（不阻断）。"""
     last = ends[-1]
@@ -806,7 +815,16 @@ def interim_block(g: dict, ends: list[str]) -> dict | None:
             yoy_fy = arev[prev_hi] * (rev_i / base_prev)
     # 占比法只有在【年内形状确实稳定】时才可信。σ 大就默认关掉开关，交给使用者判断。
     stable = std <= 0.03
+    # 同比外推锚定（与 A 股同一规则，见 us_calibrate.quarterly_estimate）要的单季序列
+    acog = series(g, TAGS_IS["营业成本"])
+    prev_q = sorted([k for k in qrev if prev_lo and prev_lo < k[1] <= prev_hi], key=lambda k: k[1])[:3]
+    q_prev_rev, q_cur_rev = single_quarters_for([qrev[k] for k in prev_q],
+                                                arev.get(prev_hi), [qrev[k] for k in after])
+    q_prev_cogs, q_cur_cogs = single_quarters_for([qcog.get(k) for k in prev_q],
+                                                  acog.get(prev_hi), [qcog.get(k) for k in after])
     return dict(n_q=nq, first=after[0][0], last=after[-1][1], stable=stable,
+                q_prev_rev=q_prev_rev, q_prev_cogs=q_prev_cogs,
+                q_cur_rev=q_cur_rev, q_cur_cogs=q_cur_cogs,
                 implied_fy_yoy=round(yoy_fy, 2) if yoy_fy else None,
                 rev=round(rev_i, 2), cogs=round(cog_i, 2) if have_cogs else None,
                 gm=round(1 - cog_i / rev_i, 5) if have_cogs and rev_i else None,

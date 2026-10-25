@@ -193,52 +193,59 @@ def build(cal: dict, path: str) -> dict:
     # 模型却把那一年整个当成纯预测 —— 在已知事实面前继续猜。用上之后每股 +9.0%。
     IT = cal.get("interim")
     IT_ROWS = {}
-    if IT and IT.get("share"):
-        r = sec(r, f"三、锚定已披露季度（{IT['first']} ~ {IT['last']}，"
-                   f"{IT['label']}实际已确定，首个预测年不再靠增速假设外推）")
-        hs = "｜".join(f"{x*100:.1f}%" for x in IT["share_hist"])
-        warn = ("" if IT["stable"] else
-                "　⚠ σ 偏大，说明「年内形状」并不稳定——这多半是高速增长而非季节性，"
-                "此时占比法等于在外推增长率，恰是锚定本想避免的。开关已默认置 0，"
-                "请对照下方同比法自行判断")
-        spec = [("锚定开关（1=锚定 0=按增速外推）", 1 if IT["stable"] else 0, "0",
-                 "1 时首个预测年营收 = 已披露实际 ÷ 占比，忽略上方该年的营收增速假设"),
-                ("已披露期占全年营收比重", IT["share"], PCT2,
-                 f"近{len(IT['share_hist'])}年同期占比：{hs}｜均值 {IT['share']*100:.2f}% "
-                 f"标准差 {IT['share_std']*100:.2f}pp{warn}"),
-                ("剩余期毛利率", round(IT["gm"] or 0.0, 5), PCT2,
-                 f"默认沿用已披露期毛利率 {(IT['gm'] or 0)*100:.2f}%；判断剩余期是否改善请自行调整")]
-        b0 = r
-        for lbl, v, f, note in spec:
+    if IT and IT.get("fy_rev"):
+        # 与 A 股同一规则（us_calibrate.quarterly_estimate）：已公布季度用实际，其余季度 =
+        # 去年同季 ×（1 + 年初至今同比），营收与营业成本各用各的同比。占比法降为参考。
+        k = int(IT["k"])
+        r = sec(r, f"三、锚定已披露季度（{IT['first']} ~ {IT['last']}，{IT['label']}已确定："
+                   "已公布季度用实际，其余季度按年初至今同比外推）")
+        SW_LBL = "锚定开关（1=锚定 0=按增速外推）"
+        ws.cell(r, 1, SW_LBL).font = Font(size=10); ws.cell(r, 1).border = BX
+        cc = ws.cell(r, 2, 1); cc.font = F_IN; cc.fill = P_O; cc.number_format = "0"
+        ws.cell(r, 6, "1 时首个预测年营收与毛利率取下方估算，忽略上方该年的判断项（三档相同：首年是实际 + 机械外推）"
+                ).font = Font(size=9, color=GREY)
+        IT_ROWS[SW_LBL] = r; r += 1
+
+        def qrow(lbl, v, note=""):
+            nonlocal r
             ws.cell(r, 1, lbl).font = Font(size=10); ws.cell(r, 1).border = BX
-            cc = ws.cell(r, 2, v); cc.font = F_IN; cc.number_format = f
-            cc.fill = P_O if "开关" in lbl else P_Y
-            ws.cell(r, 6, note).font = Font(size=9, color=(GREY if "开关" in lbl else RED))
+            c = ws.cell(r, 2, round(float(v), 2)); c.font = F_LNK; c.number_format = NUM
+            if note:
+                ws.cell(r, 6, note).font = Font(size=9, color=GREY)
             r += 1
-        IT_ROWS = {sp[0]: b0 + i for i, sp in enumerate(spec)}
-        for lbl, v, tag in [("已披露期营业收入（实际）", IT["rev"], "rev"),
-                            ("已披露期营业成本（实际）", IT["cogs"] or 0.0, "cogs")]:
-            ws.cell(r, 1, lbl).font = Font(size=10); ws.cell(r, 1).border = BX
-            cc = ws.cell(r, 2, round(float(v), 2)); cc.font = F_LNK; cc.number_format = NUM
-            ws.cell(r, 6, f"{IT['n_q']} 个季度合计，取自 10-Q").font = Font(size=9, color=GREY)
-            IT_ROWS[tag] = r; r += 1
-        ws.cell(r, 1, "→ 隐含全年营业收入（占比法）").font = Font(bold=True, size=10)
-        cc = ws.cell(r, 2, f"=B{IT_ROWS['rev']}/B{IT_ROWS['已披露期占全年营收比重']}")
-        cc.font = Font(bold=True, size=10); cc.number_format = NUM
-        IT_ROWS["fy_rev"] = r
-        ws.cell(r, 6, "锚定开关=1 时，首个预测年营收即取此值").font = Font(size=9, color="006400")
+            return r - 1
+
+        P = {}
+        for tag, name in (("rev", "营业收入"), ("cogs", "营业成本")):
+            P[f"prev_{tag}"] = [qrow(f"去年第{i + 1}季{name}", v,
+                                     "全年 − 前三季（公司不为第四季度单报 10-Q）" if i == 3 else "取自 10-Q")
+                                for i, v in enumerate(IT[f"q_prev_{tag}"])]
+            P[f"cur_{tag}"] = [qrow(f"本年第{i + 1}季{name}", v, "已公布，取自 10-Q")
+                               for i, v in enumerate(IT[f"q_cur_{tag}"])]
+        for tag, name in (("rev", "营业收入"), ("cogs", "营业成本")):
+            cur, prev = P[f"cur_{tag}"], P[f"prev_{tag}"]
+            ws.cell(r, 1, f"{name}年初至今同比").font = Font(size=10)
+            c = ws.cell(r, 2, f"=({'+'.join(f'B{x}' for x in cur)})/({'+'.join(f'B{x}' for x in prev[:k])})-1")
+            c.font = F_FX; c.number_format = PCT2
+            IT_ROWS[f"yoy_{tag}"] = r; r += 1
+        for tag, name in (("rev", "营业收入"), ("cogs", "营业成本")):
+            cur, prev = P[f"cur_{tag}"], P[f"prev_{tag}"]
+            ws.cell(r, 1, f"→ 隐含全年{name}").font = Font(bold=True, size=10)
+            c = ws.cell(r, 2, f"=({'+'.join(f'B{x}' for x in cur)})"
+                              f"+({'+'.join(f'B{x}' for x in prev[k:])})*(1+B{IT_ROWS[f'yoy_{tag}']})")
+            c.font = Font(bold=True, size=10); c.number_format = NUM
+            IT_ROWS[f"fy_{tag}"] = r; r += 1
+        if IT.get("implied_fy"):
+            ws.cell(r, 1, "　〔参考〕占比法隐含全年营业收入").font = Font(size=10)
+            c = ws.cell(r, 2, round(float(IT["implied_fy"]), 2)); c.font = F_H; c.number_format = NUM
+            ws.cell(r, 6, f"已披露 ÷ 近年同期占比均值 {IT['share']*100:.2f}%（σ {IT['share_std']*100:.2f}pp）。"
+                          "不进生效值：对周期股与高速增长股会失灵").font = Font(size=9, color=GREY)
+            r += 1
         r += 1
-        if IT.get("implied_fy_yoy"):
-            ws.cell(r, 1, "　〔交叉口径〕隐含全年营业收入（同期同比法）").font = Font(size=10)
-            cc = ws.cell(r, 2, round(IT["implied_fy_yoy"], 2)); cc.font = F_H; cc.number_format = NUM
-            ws.cell(r, 6, "已披露期同比增速 × 上年全年。占比法假设年内形状稳定，"
-                          "同比法假设同比增速延续——两者差得远说明这一年不好锚").font = Font(size=9, color=GREY)
-            r += 1
-        ws.cell(r, 1, "→ 隐含全年营业成本").font = Font(bold=True, size=10)
-        cc = ws.cell(r, 2, (f"=B{IT_ROWS['cogs']}+(B{IT_ROWS['fy_rev']}-B{IT_ROWS['rev']})"
-                            f"*(1-B{IT_ROWS['剩余期毛利率']})"))
-        cc.font = Font(bold=True, size=10); cc.number_format = NUM
-        IT_ROWS["fy_cogs"] = r; r += 2
+    elif IT:
+        r = sec(r, "三、锚定已披露季度 —— 本次不锚定，首个预测年按上方营收增速判断项外推")
+        ws.cell(r, 1, f"原因：{cal.get('interim_skip') or '季度数据不足'}").font = Font(size=10, color=RED)
+        r += 2
 
     r = sec(r, "四、自动校准假设（从历史推导；可覆盖）")
     GEN_SPEC = [
