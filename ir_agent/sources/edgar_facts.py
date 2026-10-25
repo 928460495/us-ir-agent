@@ -29,6 +29,8 @@ _DURATION: dict[str, tuple[str, ...]] = {
                 "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"),
     "cost_of_revenue": ("CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold",
                         "CostOfServices"),
+    # 公司自报的毛利：勾稽「毛利 = 营业收入 − 营业成本」用它做独立核对
+    "gross_profit": ("GrossProfit",),
     "rd_expense": ("ResearchAndDevelopmentExpense",
                    "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"),
     "sga_expense": ("SellingGeneralAndAdministrativeExpense",),
@@ -182,7 +184,17 @@ def parse_companyfacts(doc: dict, fye_mmdd: str, source_id: str,
                       source_id, money=True)
 
     out += _cover_page_shares(doc.get("facts", {}).get("dei", {}), source_id)
-    return out
+    return out + _revenue_total(out)
+
+
+def _revenue_total(facts: list[Fact]) -> list[Fact]:
+    """US GAAP 没有「营业总收入 / 营业收入」两层，营业总收入即营业收入。按 A 股
+    `_alias_facts` 同一做法补出（COMPUTED + derived_from），否则以 revenue_total 为
+    分母的指标（Altman Z 等）会误报为「数据缺失」。"""
+    return [Fact(key="revenue_total", value=f.value, unit=f.unit, currency=f.currency,
+                 period=f.period, as_of=f.as_of, source_id=f.source_id, method=Method.COMPUTED,
+                 derived_from=(f"revenue@{f.period}",))
+            for f in facts if f.key == "revenue"]
 
 
 class NoUsGaapFacts(Exception):

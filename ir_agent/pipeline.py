@@ -21,7 +21,7 @@ from pathlib import Path
 
 from ir_agent.audit import AuditResult, audit
 from ir_agent.ledger import Fact, FactLedger, LookAheadError, Method
-from ir_agent.market import market_of, quote_symbol
+from ir_agent.market import is_us, market_of, quote_symbol
 from ir_agent.periods_spot import spot_period
 from ir_agent.operators import dupont, growth, margins, multiples, periods, ttm
 from ir_agent.sources import cninfo, eastmoney, financials, quotes, resolve
@@ -277,6 +277,8 @@ def run(
     cross_check: bool = True,
     adjudicate_on_conflict: bool = True,
 ) -> ResearchRun:
+    if is_us(code):
+        return _run_us(code, year, as_of, snapshot_dir, period_suffix, cross_check)
     store = SnapshotStore(snapshot_dir)
     led = FactLedger()
     period = f"{year}{period_suffix}"
@@ -360,6 +362,15 @@ def run(
         led.put(f)
     spot = next((f.period for f in quote_res.facts if f.key == "market_cap"), None)
 
+    return _analyze(code, year, period_suffix, period, prior_period, as_of, led, store,
+                    fin, quote_res, spot, warnings, truncated, verdicts, annual_url)
+
+
+def _analyze(code: str, year: int, period_suffix: str, period: str, prior_period: str,
+             as_of: date, led: FactLedger, store: SnapshotStore, fin, quote_res,
+             spot: str | None, warnings: list[str], truncated: bool, verdicts: dict,
+             annual_url: str) -> ResearchRun:
+    """取数之后的共同部分：确定性算子、校验、草稿、审计。A 股与美股路径共用。"""
     # 4) 确定性算子
     skips = SkipLog()
     if truncated:
@@ -462,3 +473,81 @@ def run(
                        annual_url=annual_url)
 
 
+def _latest_shares(led: FactLedger, as_of: date) -> Fact | None:
+    """时点内可见的最新一期在外股数（封面数）。"""
+    from ir_agent.periods import sort_key
+
+    seen = [f for (k, _p), fs in led._facts.items() if k == "shares_outstanding"  # noqa: SLF001
+            for f in fs if f.as_of <= as_of]
+    return max(seen, key=lambda f: (sort_key(f.period), f.as_of), default=None)
+
+
+def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
+            period_suffix: str, cross_check: bool) -> ResearchRun:
+    """美股路径的取数段：EDGAR 三表（主源）+ FMP（交叉核对）→ 行情（FMP / Tiingo）。
+
+    与 A 股的区别: 披露日不用另查公告 —— XBRL 每条事实自带申报日（filed）；
+    `year` 指公司财年（苹果 FY2025 截止 2025-09-27），不是自然年。
+    """
+    from ir_agent.sources import edgar, fmp, us_quotes
+    from ir_agent.sources.edgar_facts import parse_companyfacts
+
+    store = SnapshotStore(snapshot_dir)
+    led = FactLedger()
+    period = f"{year}{period_suffix}"
+    prior_period = f"{year - 1}{period_suffix}"
+    warnings: list[str] = []
+
+    # 1–2) 三表 → 事实。期间由起止日期 + 财年末推出；as_of = 申报日。
+    info = edgar.resolve_ticker(code, store)
+    ticker = edgar.normalize_ticker(code)
+    sub, _ = edgar.fetch_submissions(info.cik, store)
+    fye = sub.get("fiscalYearEnd") or ""
+    doc, cf_sid = edgar.fetch_companyfacts(info.cik, store)
+    tag_notes: list[str] = []
+    sec_facts = parse_companyfacts(doc, fye, cf_sid, notes=tag_notes)
+    fmp_notes: list[str] = []
+    fin = resolve.resolve([
+        ("edgar", lambda: sec_facts),
+        ("fmp", lambda: fmp.fetch_statements_fmp(ticker, store, fye, notes=fmp_notes)),
+    ], cross_check=cross_check)
+    for f in fin.facts:
+        led.put(f)
+    if not any(f.period == period and f.as_of <= as_of for f in fin.facts):
+        raise RuntimeError(
+            f"EDGAR 中没有 {ticker} 在 {as_of.isoformat()} 之前申报的 {period} 数据"
+            f"（财年末 {fye}）。拒绝用抓取日代替披露日。")
+    if tag_notes:
+        warnings.append(f"XBRL 跨标签补缺 {len(tag_notes)} 处：" + "；".join(tag_notes[:3])
+                        + ("…" if len(tag_notes) > 3 else ""))
+    warnings += fmp_notes
+
+    # 3) 行情。FMP 为主、Tiingo 兜底；市值 = 收盘价 × EDGAR 在外股数。
+    shares = _latest_shares(led, as_of)
+    quote_notes: list[str] = []
+
+    def _src(fetch):
+        def _f() -> list[Fact]:
+            q = fetch(ticker, store)
+            facts = us_quotes.build_quote_facts(q, shares)
+            cap = next((f.value for f in facts if f.key == "market_cap"), None)
+            if cap is not None and q.market_cap is not None:
+                chk = us_quotes.compare_cap(cap, q.market_cap)
+                if chk.status == "不一致":
+                    quote_notes.append(f"市值核对不一致：股价×EDGAR 股数 vs FMP"
+                                       f"（相对差 {chk.rel_diff:.2%}）")
+            return facts
+        return _f
+
+    quote_res = resolve.resolve([("fmp_quote", _src(us_quotes._fmp_quote)),
+                                 ("tiingo", _src(us_quotes._tiingo_close))],
+                                cross_check=cross_check)
+    for f in quote_res.facts:
+        led.put(f)
+    warnings += quote_notes
+    if shares is None:
+        warnings.append("EDGAR 无在外股数（封面数），不计算市值。")
+    spot = next((f.period for f in quote_res.facts if f.key == "market_cap"), None)
+
+    return _analyze(ticker, year, period_suffix, period, prior_period, as_of, led, store,
+                    fin, quote_res, spot, warnings, False, {}, "")

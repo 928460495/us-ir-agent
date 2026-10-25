@@ -20,7 +20,8 @@ from decimal import Decimal
 import requests
 
 from ir_agent.ledger import Fact, Method
-from ir_agent.sources.macro import COINCIDENT, LAGGING, LEADING, MacroUnavailable
+from ir_agent.sources.macro import (COINCIDENT, LAGGING, LEADING, MacroSnapshot,
+                                     MacroUnavailable)
 
 URL = "https://api.stlouisfed.org/fred/series/observations"
 TIMEOUT = 20
@@ -135,3 +136,32 @@ def fetch_us_macro(as_of: date, store) -> tuple[list[Fact], list[str]]:
         except MacroUnavailable as e:
             notes.append(str(e))
     return facts, notes
+
+
+class UsMacroSnapshot(MacroSnapshot):
+    """美国宏观图景。指标名不写数字（「十年减两年」而非「10Y−2Y」）—— 提示词里的
+    裸数字会被审计驳回，标签本身也不例外。"""
+
+    _SHOWN = (("macro.term_spread", "期限利差（十年减两年）"),
+              ("macro.hy_spread", "高收益债利差"),
+              ("macro.initial_claims", "首次申领失业金人数"),
+              ("macro.building_permits", "新屋开工许可"),
+              ("macro.consumer_sentiment", "密歇根消费者信心"),
+              ("macro.gdp_real_yoy", "实际 GDP 同比"),
+              ("macro.gdp_nominal_yoy", "名义 GDP 同比"),
+              ("macro.industrial_production_yoy", "工业产出同比"),
+              ("macro.retail_sales_yoy", "零售销售同比"),
+              ("macro.ppi_yoy", "PPI 同比"),
+              ("macro.unemployment", "失业率"),
+              ("macro.cpi_yoy", "CPI 同比"))
+    _classify = staticmethod(classify)
+
+    @staticmethod
+    def _fmt(f: Fact) -> str:
+        from ir_agent.citation import format_value
+
+        if f.unit == "ratio":
+            return f"{f.value * 100:.2f}%"
+        if f.unit == "index":
+            return f"{f.value:.1f}"
+        return format_value(f)

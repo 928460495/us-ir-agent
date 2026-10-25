@@ -331,6 +331,9 @@ class MacroSnapshot:
               ("macro.cpi_yoy", "CPI 同比"),
               ("macro.ppi_yoy", "PPI 同比"))
 
+    # 子类（美股版 fred.UsMacroSnapshot）换指标清单与归类表时覆盖这两项
+    _classify = staticmethod(classify)
+
     @staticmethod
     def _fmt(f: Fact) -> str:
         # PMI 是扩散指数不是比率，乘 100 会变成「4980.00%」
@@ -343,7 +346,7 @@ class MacroSnapshot:
             f = self.latest(key)
             if f is None:
                 continue
-            cls = classify(key) or "其他"
+            cls = self._classify(key) or "其他"
             note = ""
             if key == "macro.pmi_manufacturing":
                 note = "（荣枯线 50，" + ("扩张" if f.value >= 50 else "收缩") + "）"
@@ -366,7 +369,7 @@ class MacroSnapshot:
             f = self.latest(key)
             if f is None:
                 continue
-            cls = classify(key) or "其他"
+            cls = self._classify(key) or "其他"
             groups.setdefault(cls, []).append(f"{label} [[{key}@{f.period}]]")
         if not groups:
             return "  （该时点无可见宏观数据）"

@@ -59,7 +59,7 @@ def test_只收定期报告():
 def test_金额单位为美元():
     fs = parse_companyfacts(AAPL, "0927", "sid")
     assert all(f.unit == "美元" and f.currency == "USD" for f in fs if f.key == "revenue")
-    assert all(f.method is Method.REPORTED and f.source_id == "sid" for f in fs)
+    assert all(f.method is Method.REPORTED and f.source_id == "sid" for f in fs if f.key != "revenue_total")
 
 
 def test_时点数按截止日标期():

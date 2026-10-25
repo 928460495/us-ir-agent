@@ -50,8 +50,11 @@ def _load_macro(r, as_of: date) -> tuple[str, str, str]:
     两份摘要不能合一: 看板要读数，提示词要占位符。给模型看数值而它又
     无法引用，就是在诱导它写裸数字然后驳回它 —— 自相矛盾的契约。
     """
+    from ir_agent.market import is_us
     from ir_agent.sources.macro import MacroSnapshot, MacroUnavailable, fetch_macro
 
+    if is_us(r.code):
+        return _load_macro_us(r, as_of)
     try:
         facts = fetch_macro()
     except MacroUnavailable as e:
@@ -662,6 +665,46 @@ def _load_cycle(r, as_of: date) -> tuple[str, str, str]:
     return view.describe(), view.for_prompt(), ""
 
 
+def _load_macro_us(r, as_of: date) -> tuple[str, str, str]:
+    """美股：FRED / ALFRED 当时版本入账本。单个序列失败只记说明。"""
+    from ir_agent.sources import fred
+    from ir_agent.sources.macro import MacroUnavailable
+
+    try:
+        facts, notes = fred.fetch_us_macro(as_of, r.store)
+    except MacroUnavailable as e:
+        return "", "", f"宏观事实（{e}）"
+    for f in facts:
+        r.ledger.put(f)
+    snap = fred.UsMacroSnapshot(facts, as_of=as_of)
+    err = f"宏观事实（部分序列取不到：{'；'.join(notes)}）" if notes else ""
+    return snap.describe(), snap.for_prompt(), err
+
+
+def _load_capm_us(r, as_of: date) -> tuple[str, str, str]:
+    """美股：无风险利率取美国十年期国债（FRED DGS10，当时版本）。β 在阶段 3 随 us-dcf 接入。"""
+    from ir_agent.periods import sort_key
+    from ir_agent.sources import fred
+    from ir_agent.sources.macro import MacroUnavailable
+
+    human, prompt, errs = [], [], []
+    try:
+        ys = [f for f in fred.fetch_series_asof("DGS10", as_of, r.store) if f.key == "rate.ust_10y"]
+        for f in ys:
+            r.ledger.put(f)
+        seen = [f for f in ys if f.as_of <= as_of]
+        if not seen:
+            errs.append("无风险利率（该时点无可见美债收益率）")
+        else:
+            f = max(seen, key=lambda x: sort_key(x.period))
+            human.append(f"  无风险利率（美国十年期国债，{f.period}）{f.value * 100:.2f}%")
+            prompt.append(f"  无风险利率（美国十年期国债）　[[rate.ust_10y@{f.period}]]")
+    except MacroUnavailable as e:
+        errs.append(f"无风险利率（{e}）")
+    errs.append("β（美股版在阶段 3 接入 us-dcf 的五年月度 β 与 Blume 调整）")
+    return "\n".join(human), "\n".join(prompt), "；".join(errs)
+
+
 def _load_capm(code: str, r, as_of: date) -> tuple[str, str, str]:
     """无风险利率与 β 入账本。返回 (给人看的, 给模型看的, 失败说明)。
 
@@ -673,8 +716,11 @@ def _load_capm(code: str, r, as_of: date) -> tuple[str, str, str]:
     有了这两条，WACC 里只剩风险溢价是判断。
     """
     from ir_agent.beta import BetaUnavailable, beta_facts, estimate
+    from ir_agent.market import is_us
     from ir_agent.sources.rates import RatesUnavailable, fetch_yields, risk_free
 
+    if is_us(code):
+        return _load_capm_us(r, as_of)
     human, prompt, errs = [], [], []
 
     try:
@@ -712,6 +758,21 @@ def _load_capm(code: str, r, as_of: date) -> tuple[str, str, str]:
     return ("\n".join(human), "\n".join(prompt), "；".join(errs))
 
 
+def _load_industry_us(code: str, r) -> tuple[str, str, str]:
+    """美股：FF49 行业与同业名单。行业聚合与画像要逐家取 companyfacts，阶段 4 与相对估值样本一并接入。"""
+    from ir_agent.sources.industry import IndustryUnavailable
+    from ir_agent.sources.us_industry import peer_set_us
+
+    try:
+        peers = peer_set_us(code, r.store)
+    except IndustryUnavailable as e:
+        return "", "", f"行业（{e}）"
+    names = "、".join(f"{m.code} {m.name}" for m in peers.members[:12])
+    more = f" 等 {len(peers.members)} 家" if len(peers.members) > 12 else ""
+    human = peers.summary() + f"\n  同业：{names}{more}"
+    return human, "", "行业聚合（美股版在阶段 4 与相对估值样本一并接入）"
+
+
 def _load_industry(code: str, r, as_of: date) -> tuple[str, str, str]:
     """行业聚合入账本。返回 (给人看的摘要, 给模型看的口径, 失败说明)。
 
@@ -720,7 +781,10 @@ def _load_industry(code: str, r, as_of: date) -> tuple[str, str, str]:
     因为缺了它，增速假设就退回人工填写。
     """
     from ir_agent.industry_facts import aggregate, industry_facts
-    from ir_agent.market import market_of
+    from ir_agent.market import is_us, market_of
+
+    if is_us(code):
+        return _load_industry_us(code, r)
     from ir_agent.sources.eastmoney import fetch_statements_em
     from ir_agent.sources.industry import IndustryUnavailable, peer_set
 
