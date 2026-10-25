@@ -48,6 +48,8 @@ class Resolution:
     disagreements: list[Disagreement] = field(default_factory=list)
     cross_checked: bool = False
     raw: dict = field(default_factory=dict)
+    cross_check_requested: bool = False
+    compared: int = 0               # 两源都有、真正比对过的 (key, period) 对数
 
     def disagreements_in(self, period: str) -> list[Disagreement]:
         """只看某个期间的分歧。
@@ -86,8 +88,15 @@ class Resolution:
         return "mixed"
 
     def summary(self, period: str | None = None) -> str:
-        lines = [f"数据源: 主源 {self.primary}"
-                 + ("，已交叉验证" if self.cross_checked else "，未交叉验证")]
+        if self.cross_checked:
+            status = f"，已交叉验证（比对 {self.compared} 项）"
+        elif self.cross_check_requested:
+            # 请求了核对却没核成（次源失败、或两源没有可比对的科目期间）——
+            # 必须明说「不可用」，不能让「无分歧」读起来像「一致」
+            status = "，交叉核对不可用"
+        else:
+            status = "，未交叉验证"
+        lines = [f"数据源: 主源 {self.primary}" + status]
         for a in self.attempts:
             mark = {"ok": "✓", "failed": "✗", "unavailable": "–",
                     "skipped": "·"}[a.status]
@@ -121,7 +130,13 @@ class Resolution:
 
 
 def _index(facts) -> dict[tuple[str, str], Decimal]:
-    return {(f.key, f.period): f.value for f in facts}
+    """同一 (key, period) 有多个版本时（如 EDGAR 的原始申报与修订），取最晚披露的那个。"""
+    latest = {}
+    for f in facts:
+        k = (f.key, f.period)
+        if k not in latest or f.as_of >= latest[k].as_of:
+            latest[k] = f
+    return {k: f.value for k, f in latest.items()}
 
 
 def resolve(
@@ -162,9 +177,9 @@ def resolve(
 
     disagreements: list[Disagreement] = []
     others = [n for n in results if n != primary]
-    cross_checked = bool(cross_check and others)
+    compared = 0
 
-    if cross_checked:
+    if cross_check and others:
         base = _index(results[primary])
         for other in others:
             comp = _index(results[other])
@@ -172,6 +187,7 @@ def resolve(
                 v2 = comp.get((key, period))
                 if v2 is None:
                     continue                        # 覆盖差异不是冲突
+                compared += 1
                 # 以主源为基准 —— 分诊时要回答的是「次源偏离权威值多少」。
                 # 主源为 0 时退回对称口径，避免除零。
                 scale = abs(v1) if v1 != 0 else max(abs(v1), abs(v2))
@@ -184,6 +200,8 @@ def resolve(
                         values={primary: v1, other: v2}, rel_diff=rel,
                     ))
 
+    # 「已交叉验证」要求至少比对过一项：次源有数据但科目期间全对不上，等于没核对
     return Resolution(facts=results[primary], primary=primary,
                       attempts=attempts, disagreements=disagreements,
-                      cross_checked=cross_checked, raw=results)
+                      cross_checked=compared > 0, raw=results,
+                      cross_check_requested=cross_check, compared=compared)
