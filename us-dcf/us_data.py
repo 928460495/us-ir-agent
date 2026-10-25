@@ -775,63 +775,80 @@ def single_quarters_for(q_prev: list, fy_prev, q_cur: list) -> tuple[list, list]
     return list(q_prev) + [q4], list(q_cur)
 
 
+QUARTER_DAYS = 365.25 / 4
+_QTOL = 20                 # 季度起止日的容差（天），覆盖 52/53 周财年
+
+
+def _by_position(qf: dict, fy_start: dt.date, nmax: int = 4) -> list:
+    """单季事实按**期间**对位到财年第 1..nmax 季：第 k 季的起点应在财年起点 + (k−1) 季附近。
+    对不上的位置为 None。不按排序位置认 —— 去年缺第二季时，第三季会被当成第二季（审查发现）。"""
+    out = [None] * nmax
+    for (s, e), v in qf.items():
+        ds = (dt.date.fromisoformat(s) - fy_start).days
+        span = (dt.date.fromisoformat(e) - dt.date.fromisoformat(s)).days
+        k = round(ds / QUARTER_DAYS) + 1
+        if 1 <= k <= nmax and abs(ds - (k - 1) * QUARTER_DAYS) <= _QTOL and 70 <= span <= 110:
+            out[k - 1] = v
+    return out
+
+
 def interim_block(g: dict, ends: list[str]) -> dict | None:
-    """年报之后的已披露季度 + 历史同期占全年比重。取不到返回 None（不阻断）。"""
+    """年报之后的已披露季度（按期间对位）+ 去年四季，供首年锚定；历史同期占比只作参考。
+    年报之后一个季度都没有返回 None；本年已满四季时返回带 skip 原因的块（不截断照常锚定）。"""
     last = ends[-1]
     qrev = _quarter_facts(g, TAGS_IS["营业收入"])
     qcog = _quarter_facts(g, TAGS_IS["营业成本"])
     arev = series(g, TAGS_IS["营业收入"])
-    after = sorted([k for k in qrev if k[1] > last], key=lambda k: k[1])
-    if not after:
+    acog = series(g, TAGS_IS["营业成本"])
+    day = dt.timedelta(days=1)
+    cur_start = dt.date.fromisoformat(last) + day
+    cur_r = _by_position({k: v for k, v in qrev.items() if k[1] > last}, cur_start)
+    cur_c = _by_position({k: v for k, v in qcog.items() if k[1] > last}, cur_start)
+    seen = [i for i, v in enumerate(cur_r) if v is not None]
+    if not seen:
         return None
-    nq = len(after)
-    if nq >= 4:            # 4 个季度已满 = 新年报应该出了，不该再靠反推
-        after = after[:3]; nq = 3
-    rev_i = sum(qrev[k] for k in after)
-    cog_i = sum(qcog[k] for k in after if k in qcog)
-    have_cogs = sum(1 for k in after if k in qcog) == nq
+    nq = seen[-1] + 1
+    after = sorted([k for k in qrev if k[1] > last], key=lambda k: k[1])
+    if nq >= 4:
+        return dict(n_q=4, skip="本年已披露满四个季度 —— 新年报应已发布，不用季报反推全年",
+                    first=after[0][0], last=after[-1][1], label="前 4 个季度")
 
-    # 历史同期占比：每个财年取【前 nq 个季度】÷ 全年
+    prev_lo, prev_hi = (ends[-2], ends[-1]) if len(ends) >= 2 else (None, None)
+    q_prev_rev = q_prev_cogs = [None] * 4
+    if prev_lo:
+        p_start = dt.date.fromisoformat(prev_lo) + day
+        inside = lambda qf: {k: v for k, v in qf.items() if prev_lo < k[1] <= prev_hi}
+        q_prev_rev, q_prev_cogs = _by_position(inside(qrev), p_start), _by_position(inside(qcog), p_start)
+        for qs, ann in ((q_prev_rev, arev.get(prev_hi)), (q_prev_cogs, acog.get(prev_hi))):
+            if qs[3] is None and ann is not None and None not in qs[:3]:
+                qs[3] = ann - sum(qs[:3])          # 公司不为第四季度单报 10-Q：全年 − 前三季
+    q_cur_rev, q_cur_cogs = cur_r[:nq], cur_c[:nq]
+
+    rev_i = sum(v for v in q_cur_rev if v is not None)
+    have = None not in q_cur_rev and None not in q_cur_cogs
+    cog_i = sum(q_cur_cogs) if have else None
+    # 〔参考〕历史同期占比：每个财年前 nq 季 ÷ 全年（不进生效值；算不出时不影响锚定）
     sh_hist = []
     for i in range(1, len(ends)):
         lo, hi = ends[i - 1], ends[i]
-        qs = sorted([k for k in qrev if lo < k[1] <= hi], key=lambda k: k[1])
-        if len(qs) < nq or not arev.get(hi):
-            continue
-        sh_hist.append(sum(qrev[k] for k in qs[:nq]) / arev[hi])
-    if not sh_hist:
-        return None
-    share = float(np.mean(sh_hist))
-    std = float(np.std(sh_hist))
-    # 第二口径：同期同比。占比法假设【年内形状稳定】，对高速增长的公司会失效 ——
-    # NVDA 前两季占比历史为 55.6/34.0/43.0/42.0%（σ 7.73pp），那不是季节性，
-    # 是被年内增长主导的。此时占比法等于在外推增长率，恰是锚定本想避免的事。
-    # 同期同比法只假设【本期同比增速延续到剩余季度】，对成长股更稳。两个口径并列展示。
-    prev_lo, prev_hi = (ends[-2], ends[-1]) if len(ends) >= 2 else (None, None)
+        qs = _by_position({k: v for k, v in qrev.items() if lo < k[1] <= hi},
+                          dt.date.fromisoformat(lo) + day)[:nq]
+        if None not in qs and arev.get(hi):
+            sh_hist.append(sum(qs) / arev[hi])
+    share = float(np.mean(sh_hist)) if sh_hist else None
+    std = float(np.std(sh_hist)) if sh_hist else None
     yoy_fy = None
-    if prev_lo:
-        qs_prev = sorted([k for k in qrev if prev_lo < k[1] <= prev_hi], key=lambda k: k[1])[:nq]
-        base_prev = sum(qrev[k] for k in qs_prev)
-        if len(qs_prev) == nq and base_prev > 0 and arev.get(prev_hi):
-            yoy_fy = arev[prev_hi] * (rev_i / base_prev)
-    # 占比法只有在【年内形状确实稳定】时才可信。σ 大就默认关掉开关，交给使用者判断。
-    stable = std <= 0.03
-    # 同比外推锚定（与 A 股同一规则，见 us_calibrate.quarterly_estimate）要的单季序列
-    acog = series(g, TAGS_IS["营业成本"])
-    prev_q = sorted([k for k in qrev if prev_lo and prev_lo < k[1] <= prev_hi], key=lambda k: k[1])[:3]
-    q_prev_rev, q_cur_rev = single_quarters_for([qrev[k] for k in prev_q],
-                                                arev.get(prev_hi), [qrev[k] for k in after])
-    q_prev_cogs, q_cur_cogs = single_quarters_for([qcog.get(k) for k in prev_q],
-                                                  acog.get(prev_hi), [qcog.get(k) for k in after])
-    return dict(n_q=nq, first=after[0][0], last=after[-1][1], stable=stable,
+    if prev_lo and None not in q_prev_rev[:nq] and have and sum(q_prev_rev[:nq]) > 0 and arev.get(prev_hi):
+        yoy_fy = arev[prev_hi] * (rev_i / sum(q_prev_rev[:nq]))
+    return dict(n_q=nq, first=after[0][0], last=after[-1][1], stable=bool(std is not None and std <= 0.03),
                 q_prev_rev=q_prev_rev, q_prev_cogs=q_prev_cogs,
                 q_cur_rev=q_cur_rev, q_cur_cogs=q_cur_cogs,
                 implied_fy_yoy=round(yoy_fy, 2) if yoy_fy else None,
-                rev=round(rev_i, 2), cogs=round(cog_i, 2) if have_cogs else None,
-                gm=round(1 - cog_i / rev_i, 5) if have_cogs and rev_i else None,
-                share=round(share, 4),
+                rev=round(rev_i, 2), cogs=round(cog_i, 2) if have else None,
+                gm=round(1 - cog_i / rev_i, 5) if have and rev_i else None,
+                share=round(share, 4) if share else None,
                 share_hist=[round(x, 4) for x in sh_hist],
-                share_std=round(std, 4),
+                share_std=round(std, 4) if std is not None else None,
                 label=f"前 {nq} 个季度",
                 implied_fy=round(rev_i / share, 2) if share else None)
 

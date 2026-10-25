@@ -86,7 +86,7 @@ LABELS = {
     # WACC 归因到前者（生益科技研报原话：「WACC 9.84% 依赖的 β 为 1.84」，
     # 而 9.84% 是用 1.3717 算的）。
     "beta": "β（对沪深300，周频两年；未用于 WACC，仅作交叉参照）", "beta.r_squared": "β 回归 R²",
-    "valuation.beta": "WACC 所用 β（五年对上证综指，Blume 调整）",
+    "valuation.beta": "WACC 所用 β（五年回归、Blume 调整；A 股对上证综指，美股日度对标普 500）",
     **{f"rate.cgb_{t}y": f"{cn}年期国债到期收益率"
        for t, cn in ((2, "两"), (5, "五"), (10, "十"), (30, "三十"))},
     # 可比 —— comps_facts 写入的键。没有标签就会在提示词里显示成裸 key，
@@ -435,7 +435,7 @@ def build_prompt(
             "但**不得**以一致预期为依据反推本报告的任何假设。\n")
     if valuation_summary:
         parts.append(
-            f"\n**估值结果**（ashare-dcf 三表模型已先行算出）\n"
+            f"\n**估值结果**（三表 DCF 模型已先行算出）\n"
             f"{valuation_summary}\n"
             "第 8 节要做的**不是**重新推一遍假设，而是**解释这个结果**：\n"
             "- 它与你在第 2–7 节得到的结论是否一致？不一致就说清分歧在哪。\n"

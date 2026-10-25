@@ -72,7 +72,7 @@ XCHECK_ITEMS = (
 SCALE_TOL = Decimal(10)
 
 
-def _scale_warnings(ps: Decimal, price: Decimal) -> list[str]:
+def _scale_warnings(ps: Decimal, price: Decimal, money: str = "元") -> list[str]:
     """每股内在价值与现价差一个数量级以上 —— 先查数据。
 
     **实测事故（生益科技 600183）。** 取数降级到腾讯通道，那条分支把换手率
@@ -87,10 +87,12 @@ def _scale_warnings(ps: Decimal, price: Decimal) -> list[str]:
     r = ps / price
     if r <= SCALE_TOL and r >= 1 / SCALE_TOL:
         return []
-    return [f"每股内在价值 {ps:,.2f} 元与现价 {price:,.2f} 元相差 "
+    unit_hint = ("在外股数、拆股还原、百万美元口径" if money == "美元" else "总股本、币种、万元/亿元")
+    cell = "摊薄股数（百万股）" if money == "美元" else "总股本（亿股）"
+    return [f"每股内在价值 {ps:,.2f} {money}与现价 {price:,.2f} {money}相差 "
             f"{r:,.4g} 倍（超过 {SCALE_TOL} 倍）—— **本结果不可采信**，"
-            f"这种量级的偏差几乎总是取数或单位错位（总股本、币种、万元/亿元），"
-            f"而不是市场定价错误。请先核对工作簿「总股本（亿股）」与现价。"]
+            f"这种量级的偏差几乎总是取数或单位错位（{unit_hint}），"
+            f"而不是市场定价错误。请先核对工作簿「{cell}」与现价。"]
 
 
 # 终值占 EV 的退化阈值。超过它，明确期对估值的贡献已经可以忽略 ——
@@ -124,7 +126,7 @@ def _with_scale_check(res: "DcfResult") -> "DcfResult":
     排在其它健全性告警前面: 数要是根本不对，后面那些告警都是在给一个错的
     模型体检 —— 与 `_readback_check` 同一条道理。
     """
-    w = _scale_warnings(res.value_per_share, res.price)
+    w = _scale_warnings(res.value_per_share, res.price, money=money_unit(res.code))
     if w:
         res.warnings = w + list(res.warnings)
     return res
@@ -177,7 +179,10 @@ class DcfResult:
         return self.value_per_share / self.price - 1
 
     def summary(self) -> str:
-        lines = [f"DCF 估值（ashare-dcf 三表模型，{Path(self.workbook).name}）"]
+        from ir_agent.market import is_us
+
+        us = is_us(self.code)
+        lines = [f"DCF 估值（{'us-dcf' if us else 'ashare-dcf'} 三表模型，{Path(self.workbook).name}）"]
         if self.verified:
             lines.append("  ✓ 公式引擎实跑验算通过")
         else:
@@ -192,7 +197,8 @@ class DcfResult:
                      f"[[valuation.terminal_roic{at}]]　"
                      f"终值占企业价值 [[valuation.terminal_share{at}]]")
         # 期限写中文数字：这一行进研报提示词，照抄阿拉伯数字会被裸数字审计判掉。
-        lines.append(f"  WACC 所用 β [[valuation.beta{at}]]（五年对上证综指回归，Blume 调整）")
+        bench = "五年日度对标普 500 回归" if us else "五年对上证综指回归"
+        lines.append(f"  WACC 所用 β [[valuation.beta{at}]]（{bench}，Blume 调整）")
         if self.scenario_ps:
             lines.append(f"  DCF 三档（人批准的悲观／中性／乐观）：悲观 [[valuation.dcf_bear{at}]]　"
                          f"中性 [[valuation.dcf_base{at}]]　乐观 [[valuation.dcf_bull{at}]]")
@@ -259,6 +265,16 @@ def _load_for(code: str, dirpath: Path | None = None):
     return _load(dirpath or Path(os.environ.get(ENV_DIR) or DEFAULT_DIR))
 
 
+def _us_meta(code: str, sub: dict) -> dict:
+    """us-dcf 的公司元数据，取自 ir-agent 已落快照的 submissions（不让引擎再直连 SEC）。"""
+    from ir_agent.sources.edgar import normalize_ticker, pad_cik
+
+    return dict(cik=pad_cik(sub.get("cik") or 0), ticker=normalize_ticker(code),
+                name=sub.get("name") or code, sic=str(sub.get("sic") or ""),
+                sic_desc=sub.get("sicDescription") or "", fye=sub.get("fiscalYearEnd") or "",
+                exchange=(sub.get("exchanges") or [None])[0])
+
+
 def _calibrate_us(D, C, code: str, as_of: date, ledger, years: int, us_ctx: dict):
     """美股校准：同一份 companyfacts 快照（按分析时点过滤）+ ir-agent 供给的行情，交给 us-dcf。
 
@@ -267,20 +283,39 @@ def _calibrate_us(D, C, code: str, as_of: date, ledger, years: int, us_ctx: dict
     """
     from ir_agent import dcf_data_us as M
 
-    store = us_ctx["store"]
-    doc = store.load(us_ctx["companyfacts_sid"]).payload
+    # 一切取数失败都转成 DcfUnavailable：调用方（第一阶段的判断项校准、第二阶段的锚定计算）
+    # 只接这一种 —— Tiingo / FRED / 快照的异常原样外抛会让整段崩掉（审查发现）
+    try:
+        store = us_ctx["store"]
+        doc = store.load(us_ctx["companyfacts_sid"]).payload
+        sub = store.load(us_ctx["submissions_sid"]).payload
+    except Exception as e:                                   # noqa: BLE001
+        raise DcfUnavailable(f"{code} 估值供数不可用：缺 companyfacts / submissions 快照"
+                             f"（{e.__class__.__name__}: {e}）") from e
     shares = next((f for f in sorted((f for (k, _p), fs in ledger._facts.items()      # noqa: SLF001
                                       if k == "shares_outstanding" for f in fs if f.as_of <= as_of),
                                      key=lambda f: f.as_of, reverse=True)), None)
+    if shares is None:
+        raise DcfUnavailable(f"{code} 账本没有在外股数（封面数），无法折算每股价值 —— "
+                             "不另行直连 SEC 补取（那一份不按分析时点过滤，与分析层不同源）")
     try:
         mi = M.market_inputs(code, as_of, store, ledger)
-        cal = C.calibrate(code, years, facts=M.pit_us_gaap(doc, as_of),
-                          shares=float(shares.value) / 1e6 if shares is not None else None,
-                          splits=mi["splits"], quote=mi["quote"], px=mi["px"], mkt=mi["mkt"])
-    except getattr(D, "DataError", Exception) as e:
-        raise DcfUnavailable(f"{code} 无法建模：{e}") from e
-    notes = ["报表由同一份 companyfacts 快照供数（按分析时点过滤，与分析层同源）；"
-             "行情：现价取账本，日线与拆股取 Tiingo，标普 500 取 FRED"]
+        cal = C.calibrate(code, years, meta=_us_meta(code, sub), facts=M.pit_us_gaap(doc, as_of),
+                          shares=float(shares.value) / 1e6, splits=mi["splits"],
+                          quote=mi["quote"], px=mi["px"], mkt=mi["mkt"])
+    except DcfUnavailable:
+        raise
+    except Exception as e:                                   # noqa: BLE001
+        raise DcfUnavailable(f"{code} 无法建模：{e.__class__.__name__}: {e}") from e
+    # us-dcf 的抽取诊断（换源 / 缺失 / 跨标签补缺 / 推导）交出来：XBRL 不单列营业成本时它会
+    # 从 FMP 补数，那部分既不同源也不受分析时点约束，不能再写「同源」（审查发现）
+    diag = (cal.get("meta") or {}).get("diag") or {}
+    swapped = [str(x) for x in diag.get("换源") or []]
+    head = ("报表由同一份 companyfacts 快照供数（按分析时点过滤，与分析层同源）" if not swapped else
+            "报表由同一份 companyfacts 快照供数（按分析时点过滤），但部分科目不同源：" + "；".join(swapped))
+    notes = [head + "；行情：现价取账本，日线与拆股取 Tiingo，标普 500 取 FRED"]
+    notes += [f"引擎诊断「{k}」：" + "；".join(str(x) for x in v[:6]) + ("…" if len(v) > 6 else "")
+              for k, v in diag.items() if k not in ("拆股", "换源") and v]
     notes += ["⚠ " + w for w in M.reconcile(cal["stmts"] | {"ends": cal["periods"]["annual"]},
                                              ledger, as_of, us_ctx["fye"])]
     return cal, notes, cal["stmts"]

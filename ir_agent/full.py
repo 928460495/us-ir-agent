@@ -193,7 +193,7 @@ def _dcf_kw(r) -> dict:
         return {}
     m = r.sec_meta or {}
     return {"us_ctx": {"store": r.store, "companyfacts_sid": m.get("companyfacts_sid"),
-                       "fye": m.get("fye", "")}}
+                       "submissions_sid": m.get("submissions_sid"), "fye": m.get("fye", "")}}
 
 
 def _company_name(code: str) -> str:

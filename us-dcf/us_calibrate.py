@@ -125,11 +125,23 @@ def quarterly_estimate(prev_rev, prev_cogs, cur_rev, cur_cogs) -> tuple[dict | N
 
 
 
+def anchor_interim(itm: dict | None) -> tuple[dict | None, str | None]:
+    """中期块 → (带首年估算的中期块, 不锚定的原因)。不锚定时 fy_rev / fy_cogs 为 None。"""
+    if not itm:
+        return itm, None
+    if itm.get("skip"):
+        return {**itm, "fy_rev": None, "fy_cogs": None}, itm["skip"]
+    qe, why = quarterly_estimate(itm["q_prev_rev"], itm["q_prev_cogs"], itm["q_cur_rev"], itm["q_cur_cogs"])
+    if not qe:
+        return {**itm, "fy_rev": None, "fy_cogs": None}, why
+    return {**itm, **{k: qe[k] for k in ("k", "g_rev", "g_cogs", "est_rev", "est_cogs", "fy_rev", "fy_cogs")}}, None
+
+
 def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
               stmts: dict | None = None, quote: dict | None = None,
               px: pd.DataFrame | None = None, mkt: pd.DataFrame | None = None,
               facts: dict | None = None, shares: float | None = None,
-              splits: list | None = None) -> dict:
+              splits: list | None = None, meta: dict | None = None) -> dict:
     """校准。上游（ir-agent）可注入数据，注入的部分不再自行取数：
 
     - stmts：与 `D.statements` 同形状的报表（事实账本供数，分析层与估值层同源）；
@@ -140,7 +152,7 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
 
     独立使用时仍走 yfinance → Stooq（Stooq 现为 JS 验证页，yfinance 需另装）。
     """
-    meta = D.resolve(symbol)
+    meta = meta if meta is not None else D.resolve(symbol)   # 注入时不再直连 SEC
     D.assert_non_financial(meta)
     g = facts if facts is not None else D.facts(meta["cik"])
     st = stmts if stmts is not None else D.statements(g, meta["ticker"], nyears, splits=splits)
@@ -157,17 +169,7 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
 
     rf, rfd = D.riskfree()
     erp_i = D.damodaran_erp()          # 市场隐含 ERP，每月更新
-    itm = D.interim_block(g, ends)     # 年报之后已披露的季度（中期锚定用）
-    itm_skip = None
-    if itm:
-        qe, itm_skip = quarterly_estimate(itm["q_prev_rev"], itm["q_prev_cogs"],
-                                          itm["q_cur_rev"], itm["q_cur_cogs"])
-        if qe:          # 不能叫 q —— q 是上面的行情
-            itm.update(k=qe["k"], g_rev=qe["g_rev"], g_cogs=qe["g_cogs"], est_rev=qe["est_rev"],
-                       est_cogs=qe["est_cogs"], fy_rev=qe["fy_rev"], fy_cogs=qe["fy_cogs"])
-            itm_skip = None
-        else:
-            itm["fy_rev"] = itm["fy_cogs"] = None
+    itm, itm_skip = anchor_interim(D.interim_block(g, ends))   # 年报之后已披露的季度（首年锚定）
     geo = D.geo_weighted_erp(symbol, erp_i["erp"])   # 收入地域加权 ERP
     px = px if px is not None else D.prices(meta["ticker"])
     mkt = mkt if mkt is not None else D.index_prices()

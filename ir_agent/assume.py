@@ -1647,8 +1647,8 @@ def _fill_from_ledger(a: AssumptionSet, ledger: FactLedger, as_of: date) -> None
         pers = annual_periods(ledger, as_of, years=1)
         if pers:
             try:
-                a.base_revenue = (ledger.get("revenue", pers[-1], as_of=as_of).value
-                                  / Decimal(10 ** 8))
+                f = ledger.get("revenue", pers[-1], as_of=as_of)
+                a.base_revenue = f.value / _base_revenue_scale(f)
             except (KeyError, LookAheadError):
                 pass
 
@@ -2161,6 +2161,12 @@ def _annual_gm_hist(cal: dict) -> list:
     n_annual = sum(1 for p in annual if rev.get(p) and cogs.get(p))
     n_annual = min(n_annual, len(gm_hist))
     return gm_hist[:n_annual]
+
+
+def _base_revenue_scale(fact) -> Decimal:
+    """账本营收（元 / 美元）→ 工作簿口径：ashare-dcf 以亿元计，us-dcf 以百万美元计。
+    此前一律除以 1e8，美股的基期营收因此比工作簿小一百倍（审查发现）。"""
+    return Decimal(10 ** 6) if fact.unit == "美元" else Decimal(10 ** 8)
 
 
 def _base_margin_of(cal: dict) -> Decimal:

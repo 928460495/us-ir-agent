@@ -70,3 +70,56 @@ def test_蒙特卡洛在锚定开启时自检通过_首年不加扰动(tmp_path)
                 rho=cal.get("_rho", 0.0), tax_mean=cal["gen"]["tax"], beta_mean=cal["dcf"]["beta"])
     out = MC.run(path, hist=hist, n=2000, seed=7, quiet=True)
     assert out["p5"] < out["p50"] < out["p95"]
+
+
+# ── 审查发现：季度按期间对位，满四季不锚定 ─────────────────────────────
+
+def _g(quarters: dict, annual: dict) -> dict:
+    """合成 companyfacts：quarters {(start, end): (营收, 成本)}，annual {end: (营收, 成本)}（百万美元）。"""
+    rev, cog = [], []
+    for (s, e), (r, c) in quarters.items():
+        rev.append(dict(start=s, end=e, val=r * 1e6, form="10-Q", filed=e))
+        cog.append(dict(start=s, end=e, val=c * 1e6, form="10-Q", filed=e))
+    for e, (r, c) in annual.items():
+        s = f"{int(e[:4])}-01-01"
+        rev.append(dict(start=s, end=e, val=r * 1e6, form="10-K", filed=e))
+        cog.append(dict(start=s, end=e, val=c * 1e6, form="10-K", filed=e))
+    return {"Revenues": {"units": {"USD": rev}}, "CostOfRevenue": {"units": {"USD": cog}}}
+
+
+Q24 = {("2024-01-01", "2024-03-31"): (100, 60), ("2024-04-01", "2024-06-30"): (110, 66),
+       ("2024-07-01", "2024-09-30"): (120, 72)}
+A = {"2023-12-31": (400, 240), "2024-12-31": (460, 276)}
+ENDS = ["2023-12-31", "2024-12-31"]
+
+
+def _anchor(quarters):
+    import us_data as UD
+    blk = UD.interim_block(_g(quarters, A), ENDS)
+    return blk, C.anchor_interim(blk)
+
+
+def test_正常情形去年第四季由全年推出():
+    blk, (it, skip) = _anchor({**Q24, ("2025-01-01", "2025-03-31"): (110, 63)})
+    assert blk["q_prev_rev"] == [100, 110, 120, 130] and skip is None and it["k"] == 1
+
+
+def test_去年缺第二季时按期间对位_不错位成别的季度():
+    q = {k: v for k, v in Q24.items() if k[0] != "2024-04-01"}
+    q[("2024-10-01", "2024-12-31")] = (130, 78)                 # 10-K 单列了第四季
+    blk, (it, skip) = _anchor({**q, ("2025-01-01", "2025-03-31"): (110, 63)})
+    assert blk["q_prev_rev"][1] is None and blk["q_prev_rev"][3] == 130
+    assert it["fy_rev"] is None and "Q2" in skip
+
+
+def test_本年缺第二季时不拿第三季顶替():
+    cur = {("2025-01-01", "2025-03-31"): (110, 63), ("2025-07-01", "2025-09-30"): (132, 79)}
+    blk, (it, skip) = _anchor({**Q24, **cur})
+    assert blk["q_cur_rev"] == [110, None, 132] and it["fy_rev"] is None and "Q2" in skip
+
+
+def test_本年已满四季不锚定也不截断():
+    cur = {(s.replace("2024", "2025"), e.replace("2024", "2025")): v for (s, e), v in Q24.items()}
+    cur[("2025-10-01", "2025-12-31")] = (140, 84)
+    blk, (it, skip) = _anchor({**Q24, **cur})
+    assert it["fy_rev"] is None and "新年报" in skip
