@@ -1061,6 +1061,10 @@ def _load_comps(code: str, r, as_of: date, snapshot_dir) -> tuple[str, str, str]
     交叉验证）。因此先按市值就近挑出六家再取数 —— 对 18 家同业逐一跑完，
     多花的时间买不到任何结论，规模差两个数量级的 PE/PB 本来就不可比。
     """
+    from ir_agent.market import is_us
+
+    if is_us(code):
+        return "", "", "可比（美股在阶段 4 与相对估值样本一并接入）"
     from ir_agent.comparables import NoComparables, select
     from ir_agent.comps import (
         InsufficientPeers,
