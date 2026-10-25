@@ -118,3 +118,18 @@ def test_美股取不到一致预期时说明原因(monkeypatch, tmp_path):
     monkeypatch.setattr(fmp, "fetch_consensus", lambda t, fye, as_of, store: None)
     md, pr, err = full._load_external("CAT", _run(tmp_path, "CAT"), TODAY)
     assert "一致预期不可用" in err and "研报" not in err
+
+
+def test_后续阶段读回第一阶段的快照_不因隔天而失效(monkeypatch, tmp_path):
+    # 审查 I2：门①签名后隔几天再跑第二次调用，as_of 不变，一致预期必须还在
+    store = SnapshotStore(tmp_path)
+    _fake(monkeypatch)
+    first = fmp.fetch_consensus("AAPL", "0927", TODAY, store, today=TODAY)
+    monkeypatch.setattr(fmp.requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不该再请求")))
+    later = fmp.fetch_consensus("AAPL", "0927", TODAY, store, today=date(2026, 11, 5))
+    assert later is not None and later.eps == first.eps
+
+
+def test_没有快照的回测时点仍不可用(monkeypatch, tmp_path):
+    _fake(monkeypatch)
+    assert fmp.fetch_consensus("AAPL", "0927", date(2026, 9, 1), SnapshotStore(tmp_path), today=TODAY) is None

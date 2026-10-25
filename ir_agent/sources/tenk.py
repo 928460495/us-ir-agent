@@ -81,7 +81,10 @@ class TenK:
 
 
 def latest_10k(sub: dict, cik: str, as_of: date) -> TenK | None:
-    """as_of 时点可见的最新年报。10-K/A 只在其后没有新的 10-K 时采用（修订版优先于原版）。"""
+    """as_of 时点可见的最新一期年报的**原版 10-K**；该期只有 10-K/A 时才用它。
+
+    叙述章节不取修订版：10-K/A 多数只补 Part III（高管薪酬、治理）或附件，主文档里没有
+    Item 1 / 1A / 7（审查发现）。数字的修订已由 XBRL 的版本机制处理，与这里无关。"""
     r = sub.get("filings", {}).get("recent", {})
     rows = []
     for i, form in enumerate(r.get("form", [])):
@@ -90,10 +93,10 @@ def latest_10k(sub: dict, cik: str, as_of: date) -> TenK | None:
         filed = date.fromisoformat(r["filingDate"][i])
         if filed > as_of:
             continue
-        rows.append((filed, form, i))
+        rows.append((date.fromisoformat(r["reportDate"][i]), form == "10-K", filed, i))
     if not rows:
         return None
-    filed, _form, i = max(rows)
+    _rep, _orig, filed, i = max(rows)            # 最新一期 → 原版优先 → 最晚申报
     acc = r["accessionNumber"][i]
     return TenK(url=ARCHIVES.format(cik=int(cik), acc=acc.replace("-", ""),
                                     doc=r["primaryDocument"][i]),

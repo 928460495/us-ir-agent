@@ -138,6 +138,10 @@ def tier_of_url(url: str) -> Tier:
         return Tier.MEDIA
     if _matches(host, "gov.cn"):
         return Tier.OFFICIAL
+    # sec.gov 上是**公司**文件（10-K、8-K、新闻稿）——管理层表述，不是政府发布的事实与政策。
+    # 不能被下面的 .gov 规则提成 OFFICIAL；公司文件走 edgar 模块入库时是 COMPANY（审查发现）
+    if _matches(host, "sec.gov"):
+        return Tier.MEDIA
     # .gov 与 .gov.cn 同理：受管制注册后缀，只发给美国政府机构（BLS、BEA、Census、美联储……）
     if _matches(host, "gov"):
         return Tier.OFFICIAL

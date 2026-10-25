@@ -66,12 +66,18 @@ def _sub(rows):
     return {"filings": {"recent": {k: [r[i] for r in rows] for i, k in enumerate(keys)}}}
 
 
-def test_10KA只在其后没有10K时采用():
+def test_同期有10KA时叙述章节仍取原版10K():
+    # 审查 I1：10-K/A 多只补 Part III（高管薪酬、治理）或附件，主文档没有 Item 1/1A/7
     sub = _sub([("10-K", "2025-10-31", "2025-09-27", "a-3", "k25.htm"),
                 ("10-K/A", "2025-01-20", "2024-09-28", "a-2", "ka24.htm"),
                 ("10-K", "2024-11-01", "2024-09-28", "a-1", "k24.htm")])
-    assert tenk.latest_10k(sub, "1", date(2025, 3, 1)).accession == "a-2"
+    assert tenk.latest_10k(sub, "1", date(2025, 3, 1)).accession == "a-1"
     assert tenk.latest_10k(sub, "1", date(2025, 11, 15)).report_date == date(2025, 9, 27)
+
+
+def test_同期只有10KA时才用它():
+    sub = _sub([("10-K/A", "2025-01-20", "2024-09-28", "a-2", "ka24.htm")])
+    assert tenk.latest_10k(sub, "1", date(2025, 3, 1)).accession == "a-2"
 
 
 def test_美股章节走10K而不是PDF(monkeypatch):

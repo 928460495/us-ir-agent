@@ -65,3 +65,10 @@ def test_只报合并SGA时DOL可算():
         led.put(Fact(key=k, value=D(v), unit="美元", currency="USD", period="2025FY",
                      as_of=date(2026, 1, 1), source_id="s", method=Method.REPORTED))
     assert ip.dol(led, "2025FY", date(2026, 6, 1)) == D("1.5")
+
+
+@pytest.mark.parametrize("url", ["https://www.sec.gov/Archives/edgar/data/1045810/000104581026000073/q2fy27pr.htm",
+                                 "https://sec.gov/cgi-bin/browse-edgar?action=getcompany"])
+def test_sec_gov上的公司文件不算官方来源(url):
+    # 审查 I3：EDGAR 上是公司文件（管理层表述），不是政府发布的事实与政策
+    assert tier_of_url(url) is Tier.MEDIA

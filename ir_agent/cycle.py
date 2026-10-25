@@ -407,14 +407,25 @@ def assess(ledger: FactLedger, as_of: date, us: bool = False) -> CycleView:
 US_HY_NEUTRAL = Decimal("0.05")
 
 
+def _monthly(ser: list[tuple[str, Decimal]], n: int = 6) -> list[tuple[str, Decimal]]:
+    """日度序列 → 每月最后一个观测，取最近 n 个月。方向要看月度走势 —— 只看最近三个
+    交易日，利差要三天动 20bp 才算变化，平时永远「持平」（审查发现，两次实跑皆如此）。"""
+    last: dict[str, tuple[str, Decimal]] = {}
+    for per, v in ser:
+        last[per[:7]] = (per, v)
+    return [last[m] for m in sorted(last)][-n:]
+
+
 def _signal(ledger, as_of, key, dimension, *, negate=False, threshold=None, flat=Decimal("0.003"),
-            text=lambda v: "", label="") -> Signal | None:
-    ser = _series(ledger, key, as_of)
+            text=lambda v: "", label="", daily=False) -> Signal | None:
+    ser = _series(ledger, key, as_of, n=400) if daily else _series(ledger, key, as_of)
     if not ser:
         return None
     per = ser[-1][0]
-    vals = [(-v if negate else v) for _, v in ser]
     raw = ser[-1][1]
+    if daily:
+        ser = _monthly(ser)
+    vals = [(-v if negate else v) for _, v in ser]
     return Signal(dimension, vals[-1], _direction(vals, flat=flat), f"{label} {text(raw)}",
                   f"{label} [[{key}@{per}]]", threshold=threshold)
 
@@ -425,13 +436,13 @@ def activity_us(ledger: FactLedger, as_of: date) -> Signal | None:
 
 
 def credit_us(ledger: FactLedger, as_of: date) -> Signal | None:
-    return _signal(ledger, as_of, "macro.hy_spread", "信贷", negate=True,
+    return _signal(ledger, as_of, "macro.hy_spread", "信贷", negate=True, daily=True,
                    threshold=-US_HY_NEUTRAL, flat=Decimal("0.002"),
                    label="高收益债利差（收窄为信用扩张）", text=lambda v: f"{v * 100:.2f}%")
 
 
 def policy_us(ledger: FactLedger, as_of: date) -> Signal | None:
-    return _signal(ledger, as_of, "macro.term_spread", "政策", threshold=FLAT_SPREAD,
+    return _signal(ledger, as_of, "macro.term_spread", "政策", threshold=FLAT_SPREAD, daily=True,
                    flat=Decimal("0.0005"), label="期限利差（十年减两年）",
                    text=lambda v: f"{v * 100:.2f}pp")
 
