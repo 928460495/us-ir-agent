@@ -514,7 +514,7 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
     ticker = edgar.normalize_ticker(code)
     tag_notes: list[str] = []
     # EDGAR 取不到美元事实时这里就报错，不交给 resolve 降级 —— FMP 只用于核对
-    sec_facts, fye, _ = load_us_statements(ticker, store, notes=tag_notes)
+    sec_facts, fye, sec_sids = load_us_statements(ticker, store, notes=tag_notes)
     fmp_notes: list[str] = []
     fin = resolve.resolve([
         ("edgar", lambda: sec_facts),
@@ -562,5 +562,13 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
         warnings.append(shares_why)
     spot = next((f.period for f in quote_res.facts if f.key == "market_cap"), None)
 
+    # 年报叙述章节（战略、产业链用）：时点内最新的 10-K。submissions 已落快照，不再请求
+    from ir_agent.sources.tenk import latest_10k
+    sub = store.load(sec_sids["submissions"]).payload
+    tk = latest_10k(sub, str(sub.get("cik", "")), as_of)
+    annual_url = tk.url if tk is not None else ""
+    if tk is None:
+        warnings.append(f"EDGAR 中没有 {as_of.isoformat()} 之前申报的 10-K，年报叙述章节缺位。")
+
     return _analyze(ticker, year, period_suffix, period, prior_period, as_of, led, store,
-                    fin, quote_res, spot, warnings, False, {}, "")
+                    fin, quote_res, spot, warnings, False, {}, annual_url)

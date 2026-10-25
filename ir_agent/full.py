@@ -552,14 +552,31 @@ def _annual_cache_dir() -> Path:
 
 def _load_sections(r):
     """年报叙述章节 —— 战略与产业链分析的证据基础。"""
+    from ir_agent.market import is_us
     from ir_agent.sources.annual_sections import extract
     from ir_agent.sources.annual_pdf import _download
 
+    if is_us(getattr(r, "code", "") or "000000"):          # 测试桩可能没有 code，按 A 股
+        return _load_sections_us(r)
     if not r.annual_url:
         return None, "年报叙述章节（未找到年报公告）"
     try:
         data = _download(r.annual_url, _annual_cache_dir())
         return extract(data, code=r.code), ""
+    except Exception as e:                                  # noqa: BLE001
+        return None, f"年报叙述章节（{e.__class__.__name__}: {e}）"
+
+
+def _load_sections_us(r):
+    """美股：10-K 主文档（HTML）的 Item 1 / 1A / 7 / 7A，交出与 A 股同形状的 SectionSet。"""
+    from ir_agent.sources import edgar
+    from ir_agent.sources.tenk import extract_sections
+
+    if not r.annual_url:
+        return None, "年报叙述章节（分析时点之前没有 10-K）"
+    try:
+        html, _ = edgar.get_text(r.annual_url, {}, "sec_10k", r.store)
+        return extract_sections(html, code=r.code), ""
     except Exception as e:                                  # noqa: BLE001
         return None, f"年报叙述章节（{e.__class__.__name__}: {e}）"
 

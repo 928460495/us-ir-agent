@@ -187,3 +187,8 @@ def test_没有封面股数时说明多类股原因(fake_all, monkeypatch, tmp_p
         f for f in orig(doc, fye, sid, notes=notes) if f.key != "shares_outstanding"])
     r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
     assert any("多类股" in w and "不计算市值" in w for w in r.warnings)
+
+
+def test_美股的年报地址是时点内最新10K(fake_all, tmp_path):
+    r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+    assert r.annual_url == "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm"

@@ -49,6 +49,7 @@ SECTION_LABELS = {
     "business": "业务情况",
     "risks": "可能面对的风险",
     "governance": "公司治理",
+    "market_risk": "市场风险（定量与定性披露）",       # 美股 10-K Item 7A
 }
 
 # 下一节的起点。**只认同级或更高级的标题**: 「第X节」与「X、标题」。
@@ -82,7 +83,8 @@ class Section:
 
     def describe(self) -> str:
         n = len(self.text)
-        return (f"{self.label}（原文第 {self.page} 页，摘录 {n} 字"
+        where = f"原文第 {self.page} 页，" if self.page else ""      # HTML（10-K）无页码
+        return (f"{self.label}（{where}摘录 {n} 字"
                 + ("，已截断" if self.truncated else "") + "）")
 
 
@@ -92,15 +94,21 @@ class SectionSet:
     pages: int
     sections: dict[str, Section] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
+    # 缺失的具体原因（如 10-K 的「以引用方式并入」）；没有就用通用说明
+    notes: dict[str, str] = field(default_factory=dict)
 
     def get(self, key: str) -> Section | None:
         return self.sections.get(key)
 
     def summary(self) -> str:
-        lines = [f"年报叙述章节 {self.code}（全文 {self.pages} 页）"]
+        size = f"全文 {self.pages} 页" if self.pages else "10-K"
+        lines = [f"年报叙述章节 {self.code}（{size}）"]
         for s in self.sections.values():
             lines.append(f"  ✓ {s.describe()}")
         for k in self.missing:
+            if k in self.notes:
+                lines.append(f"  – 未取到「{SECTION_LABELS.get(k, k)}」—— {self.notes[k]}")
+                continue
             lines.append(f"  – 未找到「{SECTION_LABELS.get(k, k)}」—— "
                          "该公司年报可能不设此节（银行等金融企业体例不同），"
                          "相关判断需另寻依据或明说无据")
