@@ -492,15 +492,23 @@ def _load_announce(code: str, r, as_of: date, out: Path,
     与 `_load_openweb` 不同的是**本函数不需要联网工具的 client**：
     模型只从代码取回的清单里挑下标，不上网。
     """
+    from ir_agent.market import is_us
     from ir_agent.sources import announce
     from ir_agent.sources.external import Corpus
 
     if r.corpus is None:
         r.corpus = Corpus(as_of=as_of)
     try:
-        res = announce.gather(code=code, company=_company_name(code),
-                              as_of=as_of, corpus=r.corpus,
-                              cache_dir=out / "pdf")
+        if is_us(code):
+            # 美股：8-K（业绩新闻稿 EX-99.1 与实质事项）。submissions 在取数时已落快照
+            from ir_agent.sources.edgar_filings import gather_us
+            sub = r.store.load(r.sec_meta["submissions_sid"]).payload
+            res = gather_us(sub=sub, as_of=as_of, corpus=r.corpus, store=r.store,
+                            company=sub.get("name") or code)
+        else:
+            res = announce.gather(code=code, company=_company_name(code),
+                                  as_of=as_of, corpus=r.corpus,
+                                  cache_dir=out / "pdf")
     except Exception as e:                                  # noqa: BLE001
         return [f"公司公告采集未执行（{e.__class__.__name__}: {str(e)[:120]}）"]
 

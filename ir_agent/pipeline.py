@@ -94,6 +94,7 @@ class ResearchRun:
     annual_url: str = ""            # 年报 PDF，战略/产业链要从中抽叙述章节
     corpus: object = None           # Corpus: 公司之外的资料
     consensus: object = None        # Consensus: 卖方一致预期（仅作对照）
+    sec_meta: dict = None           # 美股：{"submissions_sid": …}，定性层从快照读申报清单
 
     def __post_init__(self) -> None:
         if self.skips is None:
@@ -570,5 +571,7 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
     if tk is None:
         warnings.append(f"EDGAR 中没有 {as_of.isoformat()} 之前申报的 10-K，年报叙述章节缺位。")
 
-    return _analyze(ticker, year, period_suffix, period, prior_period, as_of, led, store,
-                    fin, quote_res, spot, warnings, False, {}, annual_url)
+    run = _analyze(ticker, year, period_suffix, period, prior_period, as_of, led, store,
+                   fin, quote_res, spot, warnings, False, {}, annual_url)
+    run.sec_meta = {"submissions_sid": sec_sids["submissions"]}
+    return run

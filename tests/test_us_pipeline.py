@@ -192,3 +192,8 @@ def test_没有封面股数时说明多类股原因(fake_all, monkeypatch, tmp_p
 def test_美股的年报地址是时点内最新10K(fake_all, tmp_path):
     r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
     assert r.annual_url == "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm"
+
+
+def test_定性层能从快照读到申报清单(fake_all, tmp_path):
+    r = pipeline.run("AAPL", 2025, AS_OF, snapshot_dir=tmp_path)
+    assert r.store.load(r.sec_meta["submissions_sid"]).payload["fiscalYearEnd"] == "0927"

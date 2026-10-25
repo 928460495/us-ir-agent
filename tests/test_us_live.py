@@ -33,3 +33,14 @@ def test_苹果最新10K四个Item都抽到(store):
     ss = tenk.extract_sections(html, "AAPL", max_chars=10**7)
     assert {"business", "risks", "outlook", "market_risk"} <= set(ss.sections)
     assert len(ss.get("risks").text) > 5000
+
+
+def test_苹果近一年业绩8K至少四份(store):
+    from ir_agent.sources import edgar
+    from ir_agent.sources.edgar_filings import gather_us
+    from ir_agent.sources.external import Corpus
+    sub, _ = edgar.fetch_submissions("0000320193", store)
+    res = gather_us(sub=sub, as_of=TODAY, corpus=Corpus(as_of=TODAY), store=store, company="Apple Inc.")
+    earnings = [d for d in res.docs if "业绩发布" in d.title]
+    assert len(earnings) >= 4 and all("Apple" in d.text[:2000] for d in earnings)
+    assert res.fetch_failed == 0
