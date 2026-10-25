@@ -147,3 +147,34 @@ def test_整批取数时单个序列失败不拖垮其余(fake_fred, store, monk
     facts, notes = fred.fetch_us_macro(date(2025, 10, 25), store)
     assert any(f.key == "rate.ust_10y" for f in facts)
     assert any("UMCSENT" in n for n in notes)
+
+
+def test_登记表有美元指数():
+    reg = {s.key: s for s in fred.US_MACRO}
+    lvl, yoy = reg["macro.usd_index"], reg["macro.usd_index_yoy"]
+    assert lvl.series_id == yoy.series_id == "TWEXBGSMTH"
+    assert (lvl.transform, lvl.freq, lvl.unit) == ("level", "M", "index")
+    assert (yoy.transform, yoy.freq) == ("yoy", "M")
+    assert fred.classify("macro.usd_index") == fred.classify("macro.usd_index_yoy") == "汇率"
+
+
+def test_美元指数进宏观摘要与提示词():
+    from ir_agent.citation import audit_bare_numbers
+    from ir_agent.ledger import Fact, Method
+    fs = [Fact(key=k, value=D(v), unit=u, period="2026-09", as_of=date(2026, 10, 1),
+               source_id="fred", method=Method.REPORTED)
+          for k, v, u in (("macro.usd_index", "121.5", "index"), ("macro.usd_index_yoy", "0.031", "ratio"),
+                          ("macro.cpi_yoy", "0.03", "ratio"))]
+    snap = fred.UsMacroSnapshot(fs, as_of=date(2026, 10, 25))
+    assert "[汇率] 广义美元指数（2026-09）121.5" in snap.describe()
+    p = snap.for_prompt()
+    assert "[汇率] 广义美元指数 [[macro.usd_index@2026-09]]　广义美元指数同比 [[macro.usd_index_yoy@2026-09]]" in p
+    assert audit_bare_numbers(p) == []
+
+
+def test_A股宏观提示词分组不变():
+    from ir_agent.ledger import Fact, Method
+    from ir_agent.sources.macro import MacroSnapshot
+    f = Fact(key="macro.cpi_yoy", value=D("0.01"), unit="ratio", period="2026-09",
+             as_of=date(2026, 10, 1), source_id="em", method=Method.REPORTED)
+    assert "汇率" not in MacroSnapshot([f], as_of=date(2026, 10, 25)).for_prompt()

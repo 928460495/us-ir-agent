@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import ClassVar
 
 import requests
 
@@ -331,8 +332,9 @@ class MacroSnapshot:
               ("macro.cpi_yoy", "CPI 同比"),
               ("macro.ppi_yoy", "PPI 同比"))
 
-    # 子类（美股版 fred.UsMacroSnapshot）换指标清单与归类表时覆盖这两项
+    # 子类（美股版 fred.UsMacroSnapshot）换指标清单、归类表与分组时覆盖这几项
     _classify = staticmethod(classify)
+    _GROUPS: ClassVar[tuple[str, ...]] = (LEADING, COINCIDENT, LAGGING)   # ClassVar：不进 dataclass 字段
 
     @staticmethod
     def _fmt(f: Fact) -> str:
@@ -375,7 +377,7 @@ class MacroSnapshot:
             return "  （该时点无可见宏观数据）"
         lines = ["  指标按 CFA 三分法归类。**领先指标回答「接下来会怎样」**，"
                  "宏观一节要给的是展望而非回顾："]
-        for cls in ("领先", "同步", "滞后"):
+        for cls in self._GROUPS:
             if cls in groups:
                 lines.append(f"  [{cls}] " + "　".join(groups[cls]))
         return "\n".join(lines)

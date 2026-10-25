@@ -75,3 +75,12 @@ def test_FRED企业利润与库存销售比(store):
     isr = fred.fetch_series_asof("ISRATIO", TODAY, store)
     assert any(f.key == "macro.corporate_profits_yoy" for f in cp)
     assert all(1 < f.value < 2 for f in isr if f.key == "macro.inventory_sales_ratio")
+
+
+def test_FRED广义美元指数(store):
+    from ir_agent.sources import fred
+    if not os.environ.get("FRED_API_KEY"):
+        pytest.skip("未设置 FRED_API_KEY")
+    fs = fred.fetch_series_asof("TWEXBGSMTH", TODAY, store)
+    lvl = max((f for f in fs if f.key == "macro.usd_index"), key=lambda f: f.period)
+    assert 80 < lvl.value < 160 and any(f.key == "macro.usd_index_yoy" for f in fs)

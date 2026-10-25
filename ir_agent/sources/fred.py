@@ -28,6 +28,7 @@ from ir_agent.sources.macro import (COINCIDENT, LAGGING, LEADING, MacroSnapshot,
 
 URL = "https://api.stlouisfed.org/fred/series/observations"
 TIMEOUT = 20
+FX = "汇率"
 HISTORY = timedelta(days=366 * 6)            # 取六年：够算同比与近几年趋势；日度约 1560 个版本，低于 FRED 单次两千个的上限
 
 
@@ -58,6 +59,10 @@ US_MACRO: tuple[UsSeries, ...] = (
     UsSeries("macro.initial_claims", "ICSA", "level", "D", LEADING, "人"),
     UsSeries("macro.building_permits", "PERMIT", "level", "M", LEADING, "千套"),
     UsSeries("macro.consumer_sentiment", "UMCSENT", "level", "M", LEADING, "index"),
+    # 美元汇率：境外收入占比高的公司（苹果过半）折算与定价都受它影响。ICE 的 DXY 是专有
+    # 指数，FRED 上取美联储编制的广义美元指数（月均，可算同比）。不属于三分法，单列「汇率」组
+    UsSeries("macro.usd_index", "TWEXBGSMTH", "level", "M", FX, "index"),
+    UsSeries("macro.usd_index_yoy", "TWEXBGSMTH", "yoy", "M", FX),
     UsSeries("macro.term_spread", "T10Y2Y", "pct", "D", LEADING),
     UsSeries("macro.hy_spread", "BAMLH0A0HYM2", "pct", "D", LEADING),
     UsSeries("rate.ust_10y", "DGS10", "pct", "D", None),
@@ -167,8 +172,11 @@ class UsMacroSnapshot(MacroSnapshot):
               ("macro.corporate_profits_yoy", "企业税后利润同比"),
               ("macro.inventory_sales_ratio", "库存销售比"),
               ("macro.unemployment", "失业率"),
-              ("macro.cpi_yoy", "CPI 同比"))
+              ("macro.cpi_yoy", "CPI 同比"),
+              ("macro.usd_index", "广义美元指数"),
+              ("macro.usd_index_yoy", "广义美元指数同比"))
     _classify = staticmethod(classify)
+    _GROUPS = (LEADING, COINCIDENT, LAGGING, FX)
 
     @staticmethod
     def _fmt(f: Fact) -> str:
