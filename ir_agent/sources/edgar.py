@@ -13,10 +13,13 @@ SEC 的两条硬规矩:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 
 import requests
 
@@ -83,6 +86,46 @@ def _get_json(url: str, source: str, store) -> tuple[dict, str]:
     payload = with_retry(once)
     fetched_at = datetime.now()
     sid = store.save(source=source, payload=payload, url=url, fetched_at=fetched_at)
+    return payload, sid
+
+
+def _cache_index_path(store, source: str, url: str) -> Path:
+    return Path(store.root) / "_cache" / f"{source}_{hashlib.md5(url.encode()).hexdigest()[:12]}.json"
+
+
+def _cache_index_put(store, source: str, url: str, fetched: datetime, sid: str) -> None:
+    p = _cache_index_path(store, source, url)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"fetched": fetched.isoformat(), "source_id": sid}), encoding="utf-8")
+
+
+def fetch_json_cached(url: str, source: str, store, as_of: date, *, transform=None,
+                      params: dict | None = None) -> tuple[dict, str]:
+    """同业取数用：**抓取日不早于分析时点**的快照直接复用，否则重抓。
+
+    时点守卫只认申报日 `filed`：as_of 当天或之后抓的 companyfacts 含有 as_of 前申报的全部事实，
+    复用它与重抓等价；更早抓的会漏掉中间申报的财报，不能用。第二阶段隔几天再跑（as_of 不变）
+    因此不必重下几十上百家同业。`transform` 在落快照前裁剪原始响应（快照 params 写明裁剪规则）。
+    """
+    idx = _cache_index_path(store, source, url)
+    if idx.exists():
+        d = json.loads(idx.read_text(encoding="utf-8"))
+        if datetime.fromisoformat(d["fetched"]).date() >= as_of and store.path_for(d["source_id"]).exists():
+            return store.load(d["source_id"]).payload, d["source_id"]
+    headers = sec_headers()
+
+    def once():
+        _throttle()
+        r = requests.get(url, headers=headers, timeout=TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+
+    payload = with_retry(once)
+    if transform is not None:
+        payload = transform(payload)
+    fetched = datetime.now()
+    sid = store.save(source=source, payload=payload, url=url, fetched_at=fetched, params=params)
+    _cache_index_put(store, source, url, fetched, sid)
     return payload, sid
 
 

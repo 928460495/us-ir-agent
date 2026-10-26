@@ -236,6 +236,41 @@ def _cash_begin(facts: list[Fact]) -> list[Fact]:
     return out
 
 
+MAPPED_TAGS: frozenset[str] = frozenset(
+    t for table in (_DURATION, _INSTANT, _SHARES_DURATION, _DA_PARTS)
+    for tags in table.values() for t in tags) | frozenset(_DA_TOTAL)
+
+
+def slim(doc: dict) -> dict:
+    """只留映射表用到的 us-gaap 科目与全部 dei。同业 companyfacts 动辄几 MB、一个行业上百家，
+    原样落快照要上 GB；裁掉的科目不进任何事实，账本里每条事实指向的原始行都还在。"""
+    facts = doc.get("facts", {})
+    gaap = facts.get("us-gaap", {})
+    out = {k: v for k, v in doc.items() if k != "facts"}
+    out["facts"] = {"us-gaap": {t: v for t, v in gaap.items() if t in MAPPED_TAGS},
+                    "dei": facts.get("dei", {})}
+    if "us-gaap" not in facts:
+        del out["facts"]["us-gaap"]
+    return out
+
+
+def period_ends(doc: dict, fye_mmdd: str) -> dict[str, date]:
+    """期间标签 → 期末日。美股同业财年各不相同，对齐要按期末日期比，不能拿同名标签比（设计「三.2」）。"""
+    out: dict[str, date] = {}
+    gaap = doc.get("facts", {}).get("us-gaap", {})
+    for tag in MAPPED_TAGS & set(gaap):
+        for unit in gaap[tag].get("units", {}).values():
+            for x in unit:
+                if x.get("form") not in FORMS or not x.get("filed"):
+                    continue
+                start = date.fromisoformat(x["start"]) if x.get("start") else None
+                end = date.fromisoformat(x["end"])
+                label = fiscal_label(start, end, fye_mmdd)
+                if label is not None and (label not in out or end > out[label]):
+                    out[label] = end
+    return out
+
+
 class NoUsGaapFacts(Exception):
     """公司没有 us-gaap 事实（多为只报 IFRS 的外国私人发行人）。"""
 
