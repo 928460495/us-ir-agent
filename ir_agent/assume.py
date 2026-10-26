@@ -729,7 +729,7 @@ def _fmt_factor(v: Decimal, unit: str) -> str:
 def parse(text: str, years: int,
           decomps: list[Decomposition] | None = None,
           factor_data: dict | None = None,
-          as_of: date | None = None) -> AssumptionSet:
+          as_of: date | None = None, us: bool = False) -> AssumptionSet:
     """decomps 给定时按因子解析；否则沿用两标量模式（降级路径）。
 
     降级路径不删 —— 预研（拆分解式、采数据）失败不该让整轮研究停摆。
@@ -741,7 +741,7 @@ def parse(text: str, years: int,
     """
     if not decomps:
         return _parse_scalar(text, years)
-    return _parse_factors(text, years, decomps, factor_data, as_of)
+    return _parse_factors(text, years, decomps, factor_data, as_of, us=us)
 
 
 def _shown(raw: str) -> str:
@@ -863,7 +863,7 @@ def _parse_scalar(text: str, years: int) -> AssumptionSet:
 def _parse_factors(text: str, years: int,
                    decomps,
                    factor_data: dict | None = None,
-                   as_of: date | None = None) -> AssumptionSet:
+                   as_of: date | None = None, us: bool = False) -> AssumptionSet:
     """按因子读数。每一行对应分解式里的一个因子，而不是营收增速/毛利率
     本身 —— 合成交给 `synthesize`，模型只负责填因子。
 
@@ -913,7 +913,7 @@ def _parse_factors(text: str, years: int,
         if vals is None:
             continue
         out.read_notes += _unit_notes(f.unit, where, parts[2:5])
-        bases, prob = _factor_basis(parts[5], factor_data.get(f.key), as_of,
+        bases, prob = _factor_basis(parts[5], factor_data.get(f.key), as_of, us=us,
                                     prior=last_basis.get(f.key))
         if prob:
             out.read_notes.append(f"{where}：{prob}")
@@ -944,7 +944,7 @@ def _parse_factors(text: str, years: int,
         if f.short in out.base_values:
             out.read_notes.append(f"{where}出现了不止一行，按最后一行读")
         out.read_notes += _unit_notes(f.unit, where, [parts[1]])
-        bases, prob = _factor_basis(" | ".join(parts[2:]), factor_data.get(f.key), as_of)
+        bases, prob = _factor_basis(" | ".join(parts[2:]), factor_data.get(f.key), as_of, us=us)
         if prob:
             out.read_notes.append(f"{where}：{prob}")
         out.base_values[f.short] = BaseValue(
@@ -1199,7 +1199,7 @@ def _match_excerpt(fd: FactorData | None, quote: str) -> bool:
 
 def _factor_basis(raw: str, fd: FactorData | None,
                   as_of: date | None,
-                  prior: list[Basis] | None = None) -> tuple[list[Basis], str]:
+                  prior: list[Basis] | None = None, us: bool = False) -> tuple[list[Basis], str]:
     """因子模式下依据的写法——比两标量模式（`_basis`）多三条出口。
 
     **返回 (依据, 问题)，不驳回**（子项目三，2026-10-15）：下面三条出口的边界
@@ -1307,7 +1307,7 @@ def _factor_basis(raw: str, fd: FactorData | None,
     if _looks_like_estimate(raw):
         if fd is None or fd.status == gaps.MISSING:
             return [], ""
-        return [], (f"写了「无数据（估计）」，但该因子的采集状态是「{fd.status}」，"
+        return [], (f"写了「无数据（估计）」，但该因子的采集状态是「{gaps.status_label(fd.status, us)}」，"
                     f"不是「{gaps.MISSING}」")
 
     if _looks_like_ditto(raw):
@@ -1836,7 +1836,16 @@ _BASIS_RULES = (
 )
 
 
-def _factor_head(decomps: list[Decomposition], factor_data: dict) -> str:
+def _basis_rules(us: bool) -> tuple[str, ...]:
+    """依据写法规则。美股把状态名换成 ② 起给人看的那套（10-K 披露 / 机构测算），
+    否则填写者在因子表里看到的名字与规则里写的对不上，「不能写无数据」那条会落空。"""
+    if not us:
+        return _BASIS_RULES
+    return tuple(r.replace("「年报披露」", "「10-K 披露」").replace("「研报测算」", "「机构测算」")
+                 for r in _BASIS_RULES)
+
+
+def _factor_head(decomps: list[Decomposition], factor_data: dict, us: bool = False) -> str:
     """分解模式下替换 `_SCALAR_HEAD` 的提示词头部。
 
     **逐因子填、代码合成**——不是把「你只填这两项」换成「你只填一堆
@@ -1861,9 +1870,9 @@ def _factor_head(decomps: list[Decomposition], factor_data: dict) -> str:
                 # 是一句「未披露 XX」），必须把 gaps.collect 摘出来的
                 # 原文片段一起摆出来，让模型自己判断这到底是不是能当
                 # 数值依据用的原文，而不是被一个状态词代为下结论。
-                st = f"{fd.status}（{fd.note}）"
+                st = f"{gaps.status_label(fd.status, us)}（{fd.note}）"
             else:
-                st = fd.status
+                st = gaps.status_label(fd.status, us)
             # Minor-3（final-fix-D）：`fd.note` 抄的是 gaps.collect 摘出
             # 来的年报/研报原文片段——PDF 抽出的章节带表格竖线很常见，
             # 未转义的 "|" 会被当成这一行提示词表格自己的列分隔符，把
@@ -1883,7 +1892,7 @@ def _factor_head(decomps: list[Decomposition], factor_data: dict) -> str:
               "−1、−2、−3（相对基期累计），而不是 −1、−1、−1"
               "（那样合成出来三年会是同一个数 13.15%，不会继续下滑）。",
               "",
-              *_BASIS_RULES,
+              *_basis_rules(us),
               "",
               "对每一个因子、每一年给出一行：",
               "`假设: <因子名> | 第N年 | <悲观> | <中性> | <乐观> | "
@@ -1893,7 +1902,7 @@ def _factor_head(decomps: list[Decomposition], factor_data: dict) -> str:
 
 
 def _formula_head(m: FormulaModel, factor_data: dict,
-                  ledger_bases: dict | None = None) -> str:
+                  ledger_bases: dict | None = None, us: bool = False) -> str:
     """公式化分解式的提示词头部（spec 2026-10-14 三）。旧的乘/加分解式仍用
     `_factor_head`，提示词与改动前一字不差。"""
     ledger_bases = ledger_bases or {}
@@ -1913,8 +1922,8 @@ def _formula_head(m: FormulaModel, factor_data: dict,
               "", "| 短名 | 因子 | 单位 | 数据 |", "| --- | --- | --- | --- |"]
     for f in m.factors:
         fd = factor_data.get(f.key)
-        st = "未采集" if fd is None else (f"{fd.status}（{fd.note}）"
-                                         if fd.note else fd.status)
+        label = "" if fd is None else gaps.status_label(fd.status, us)
+        st = "未采集" if fd is None else (f"{label}（{fd.note}）" if fd.note else label)
         lines.append(f"| {_esc_pipe(f.short)} | {_esc_pipe(f.label)} "
                      f"| {_esc_pipe(f.unit)} | {_esc_pipe(st)} |")
     need = m.needs_base()
@@ -1938,7 +1947,7 @@ def _formula_head(m: FormulaModel, factor_data: dict,
               "写 5.47，不写 0.0547（0.0547 会被当成 0.0547 个百分点，缩小 100 "
               "倍）。换成小数是公式里 /100 的事，你不用自己换。",
               "",
-              *_BASIS_RULES,
+              *_basis_rules(us),
               "",
               "对每一个因子、每一年给出一行（因子写短名）：",
               "`假设: <短名> | 第N年 | <悲观> | <中性> | <乐观> | "
@@ -1949,7 +1958,7 @@ def _formula_head(m: FormulaModel, factor_data: dict,
 def build_prompt(judg: dict, labels: list[str], context: str,
                  brief: str = "", decomps=None,
                  factor_data: dict | None = None,
-                 ledger_bases: dict | None = None) -> str:
+                 ledger_bases: dict | None = None, us: bool = False) -> str:
     g, gm = judg.get("g_stats") or (), judg.get("gm_stats") or ()
     hist = []
     if g:
@@ -1968,9 +1977,9 @@ def build_prompt(judg: dict, labels: list[str], context: str,
         # 旧的乘/加分解式列表：提示词与改动前一字不差。第三次调用从 drivers.md
         # 读回的是 `FormulaModel`（旧写法翻译过来、legacy=True）—— 它没有 `.factors`
         # 列表可迭代，走公式化的头部（子项目三端到端测试抓到）。
-        head = _factor_head(decomps, factor_data or {})
+        head = _factor_head(decomps, factor_data or {}, us=us)
     else:
-        head = _formula_head(m, factor_data or {}, ledger_bases)
+        head = _formula_head(m, factor_data or {}, ledger_bases, us=us)
     return PROMPT.format(head=head, years=len(labels), labels="、".join(labels),
                          history="\n".join(hist) or "  （无）",
                          context=context, brief=brief or "（无）")

@@ -219,11 +219,13 @@ def _anchor_lines(a, anchor: dict) -> list[str]:
              f"（营收 {anchor['g_rev']:+.2%}、营业成本 {anchor['g_cogs']:+.2%}）。三档相同，"
              f"建模时第 1 年用这组值替换合成表的第 1 年：营收增速 {g1:.2%}；毛利率 {m1:.2%}"]
     mb = a.margin_bases or {}
+    from ir_agent.market import is_us
+    base_name = "10-K 基期" if is_us(getattr(a, "code", "") or "000000") else "年报基期"
     if all(len(mb.get(k) or []) > 1 for k, _ in order):
         sh = "、".join(f"{cn} {(mb[k][1] - mb[k][0]) * 100:+.2f}pp" for k, cn in order)
-        lines.append("- 毛利率公式用 基期(毛利率)，第 2 年起各档的基期平移为「年报基期 + "
+        lines.append(f"- 毛利率公式用 基期(毛利率)，第 2 年起各档的基期平移为「{base_name} + "
                      f"(锚定值 − 第 1 年公式值)」：{sh} —— 合成表第 2 年起已含这个平移，"
-                     "用「年报基期 + 累计 pp」手算时要加上它。")
+                     f"用「{base_name} + 累计 pp」手算时要加上它。")
     return lines
 
 
@@ -328,8 +330,10 @@ def fill_and_review(filler, judge, *, judg: dict, labels: list[str], context: st
         probe = assume.AssumptionSet(code="", labels=[], model=model)
         assume._fill_from_ledger(probe, ledger, as_of)
         ledger_bases = probe.base_values
+    from ir_agent.market import is_us
+    us = is_us(code) if code else False
     prompt = assume.build_prompt(judg, labels, context, brief=body, decomps=decomps,
-                                 factor_data=factor_data, ledger_bases=ledger_bases)
+                                 factor_data=factor_data, ledger_bases=ledger_bases, us=us)
     materials = prompt
     hay = "\n".join([body, *[getattr(fd, "source_excerpt", "") or ""
                              for fd in (factor_data or {}).values()]])
@@ -338,7 +342,7 @@ def fill_and_review(filler, judge, *, judg: dict, labels: list[str], context: st
     for n in range(1, max_rounds + 1):
         raw = filler(prompt)
         a = assume.parse(raw, len(labels), decomps=decomps,
-                         factor_data=factor_data, as_of=as_of)
+                         factor_data=factor_data, as_of=as_of, us=us)
         a.code, a.labels = code, labels
         a.factor_data = dict(factor_data or {})
         a.base_margin = base_margin
