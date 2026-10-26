@@ -114,20 +114,38 @@ def _ensure_da(led: FactLedger, period: str, as_of: date) -> None:
         pass
 
 
+def _fact(led: FactLedger, key: str, period: str, as_of: date):
+    try:
+        return led.get(key, period, as_of=as_of)
+    except (KeyError, LookAheadError):
+        return None
+
+
 def flow_ttm(led: FactLedger, key: str, end: tuple[int, int],
              as_of: date) -> Decimal | None:
-    """截至 end 的流量 TTM。end 的季度必须是 2（中报）或 4（年报）。"""
+    """截至 end 的流量 TTM = 本期累计 + 上年 FY − 上年同期累计。
+
+    A 股截止季只能是 2（中报）或 4（年报）：折旧摊销只在中报、年报披露。美股（美元事实）
+    每季都披露折旧摊销（设计「三.4」），截止季可以是 1–4。
+    """
     y, q = end
     if q == 4:
         return _v(led, key, _label((y, 4)), as_of)
-    if q != 2:
+    cur = _fact(led, key, _label(end), as_of)
+    if cur is None or (q != 2 and cur.currency != "USD"):
         return None
-    cur = _v(led, key, _label((y, 2)), as_of)
     prev_fy = _v(led, key, _label((y - 1, 4)), as_of)
-    prev_h1 = _v(led, key, _label((y - 1, 2)), as_of)
-    if None in (cur, prev_fy, prev_h1):
+    prev_cum = _v(led, key, _label((y - 1, q)), as_of)
+    if None in (prev_fy, prev_cum):
         return None
-    return cur + prev_fy - prev_h1
+    return cur.value + prev_fy - prev_cum
+
+
+def _flow_quarters(led: FactLedger) -> tuple[int, ...]:
+    """流量 TTM 可以截止的季度：A 股中报 / 年报，美股任一季（见 flow_ttm）。"""
+    from ir_agent.operators.aggregates import ledger_op_is_pre_interest
+
+    return (1, 2, 3, 4) if ledger_op_is_pre_interest(led) else _HALF_ENDS
 
 
 def flow_end(led: FactLedger, as_of: date) -> tuple[int, int] | None:
@@ -135,7 +153,7 @@ def flow_end(led: FactLedger, as_of: date) -> tuple[int, int] | None:
     cands: list[tuple[int, int]] = []
     for f_end in sorted({(int(p[:4]), _Q_OF.get(p[4:]))
                          for k, p in list(led._facts)              # noqa: SLF001
-                         if k == "operating_profit" and _Q_OF.get(p[4:]) in _HALF_ENDS},
+                         if k == "operating_profit" and _Q_OF.get(p[4:]) in _flow_quarters(led)},
                         reverse=True):
         cands.append(f_end)
     for end in cands:
@@ -155,7 +173,8 @@ def _ebitda_ttm(led: FactLedger, end: tuple[int, int] | None,
     （US GAAP 不加利息，见 _ebitda_parts）。同业没出本期就退上一期（与 PE 同一规则）。"""
     if end is None:
         return None
-    for q in (end, _prev_quarter(end) if end[1] == 4 else (end[0] - 1, 4)):
+    us = _flow_quarters(led) != _HALF_ENDS
+    for q in (end, _prev_quarter(end) if end[1] == 4 or us else (end[0] - 1, 4)):
         for per in (_label(q), _label((q[0] - 1, 4)), _label((q[0] - 1, 2))):
             _ensure_da(led, per, as_of)
         vals = [flow_ttm(led, k, q, as_of) for k in _ebitda_parts(led)]

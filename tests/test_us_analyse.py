@@ -47,9 +47,9 @@ def _r(tmp_path):
                            consensus=None, quotes=None, sec_meta={"submissions_sid": sid})
 
 
-def test_美股可比留待阶段4且不碰东财(no_cn, tmp_path):
+def test_美股可比在行业同业缺失时说明原因且不碰东财(no_cn, tmp_path):
     human, prompt, err = full._load_comps("AAPL", _r(tmp_path), AS_OF, tmp_path)
-    assert (human, prompt) == ("", "") and "阶段 4" in err
+    assert (human, prompt) == ("", "") and "行业同业未取到" in err
 
 
 def test_美股确定性分析层不调用A股数据源(no_cn, us_sources, tmp_path):

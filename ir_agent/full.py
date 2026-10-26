@@ -1120,6 +1120,113 @@ def _industry_profile(peers, agg, cache, r, as_of: date) -> tuple[str, str]:
     return human, model
 
 
+def _us_comps_ledger(r, ticker: str, spot: str | None):
+    """美股同业的可比表账本：年度数（已重贴到本司财年）+ 即期市值与股价 + 按日期对齐的 TTM 利润。
+
+    TTM 挂在**本司**最新 TTM 的标签上，`ratios` 的 PE 分母（`latest_visible`）因此与本司同一截止季；
+    数值在同业**自己的**标签上算（年初至今长度各家不同，不能重贴后再算）。
+    """
+    from ir_agent.ledger import Fact, FactLedger, Method
+    from ir_agent.operators.ttm import latest_visible
+    from ir_agent.relval_data import _Q_OF, flow_ttm
+    from ir_agent.sources.us_quotes import peer_market_cap
+    from ir_agent.us_align import align_quarter
+
+    as_of = r.as_of
+    book, q = r.peer_books[ticker], r.peer_quotes[ticker]
+    led = FactLedger()
+    for f in r.peer_statements[ticker].values():
+        led.put(f)
+    if spot is not None:
+        led.put(Fact(key="last_price", value=q.price, unit="美元", currency="USD", period=spot,
+                     as_of=q.as_of, source_id=q.source_id, method=Method.REPORTED))
+        cap, _ = peer_market_cap(book.facts, q, as_of)
+        if cap is not None:
+            led.put(Fact(key="market_cap", value=cap, unit="美元", currency="USD", period=spot,
+                         as_of=q.as_of, source_id=q.source_id, method=Method.COMPUTED,
+                         derived_from=(f"last_price@{spot}", "shares_outstanding")))
+    mine = latest_visible(r.ledger, "net_profit_ttm", as_of)
+    t_end = (getattr(r, "target_ends", None) or {}).get(mine.period) if mine else None
+    if t_end is None:
+        return led
+    own = FactLedger()
+    for f in book.facts:
+        own.put(f)
+    visible = {f.period for f in book.facts
+               if f.key == "net_profit_attr_parent" and f.as_of <= as_of}
+    hit = align_quarter(book.ends, t_end, visible)
+    if hit is None:
+        return led
+    label = hit[0]
+    v = flow_ttm(own, "net_profit_attr_parent", (int(label[:4]), _Q_OF[label[4:]]), as_of)
+    if v is not None:
+        filed = max(f.as_of for f in book.facts
+                    if f.key == "net_profit_attr_parent" and f.period == label and f.as_of <= as_of)
+        led.put(Fact(key="net_profit_ttm", value=v, unit="美元", currency="USD", period=mine.period,
+                     as_of=filed, source_id=book.sids.get("companyfacts", "edgar"),
+                     method=Method.COMPUTED,
+                     derived_from=(f"net_profit_attr_parent@{label}#{ticker}",)))
+    return led
+
+
+def _load_comps_us(code: str, r, as_of: date) -> tuple[str, str, str]:
+    """美股可比：同一 FF49 行业内按市值（IEX 价 × 封面股数）就近选六家，与 A 股同一规则。
+
+    同业数据来自行业聚合那一步（`r.peer_books` 等），**不再逐家跑完整取数**：A 股为每家可比
+    重跑整条 pipeline，美股同业的 companyfacts 已经在手。行情日与本司不同、无市值的同业不进，
+    原因留在摘要里。
+    """
+    from ir_agent.comparables import Selection, Sized, nearest
+    from ir_agent.comps import (CompsRow, InsufficientPeers, build_comps, comps_facts,
+                                peer_metrics_from_ledger)
+    from ir_agent.sources.eastmoney import CompanyType
+    from ir_agent.sources.us_quotes import peer_market_cap
+
+    books = getattr(r, "peer_books", None)
+    if not books:
+        return "", "", "可比（行业同业未取到：行业聚合未完成，见「行业」一节）"
+    mc = next((f for f in (r.quotes.facts if r.quotes else []) if f.key == "market_cap"), None)
+    qday = mc.as_of if mc else None
+    sized, dropped = [], []
+    for t, b in books.items():
+        q = r.peer_quotes.get(t)
+        if q is None:
+            dropped.append((t, "无行情"))
+            continue
+        if qday is not None and q.as_of != qday:
+            dropped.append((t, f"行情停在 {q.as_of.isoformat()}，与本司报价日 {qday.isoformat()} 不同"))
+            continue
+        cap, why = peer_market_cap(b.facts, q, as_of)
+        if cap is None:
+            dropped.append((t, why))
+            continue
+        sized.append(Sized(t, b.name, cap))
+    if mc is not None:
+        sized.append(Sized(code, r.peer_set.target_name, mc.value))
+    chosen, me = nearest(sized, code)
+    if not chosen:
+        return "", "", "可比（同业市值全部取不到）"
+    sel = Selection(target=code, chosen=chosen, universe=len(r.peer_set.members), dropped=dropped,
+                    target_cap=me.market_cap if me else None)
+    # 相对估值的可比法沿用这份名单（与 A 股同一约定）
+    r.comps_codes = sel.codes
+    spot = mc.period if mc else None
+    gen = CompanyType.GENERAL
+    rows = [CompsRow(code=code, name=code, period=r.period, company_type=gen,
+                     metrics=peer_metrics_from_ledger(r.ledger, r.period, as_of, spot, company_type=gen))]
+    for s_ in chosen:
+        rows.append(CompsRow(code=s_.code, name=s_.name, period=r.period, company_type=gen,
+                             metrics=peer_metrics_from_ledger(_us_comps_ledger(r, s_.code, spot),
+                                                              r.period, as_of, spot, company_type=gen)))
+    try:
+        table = build_comps(code, rows, r.period, as_of, [])
+    except (InsufficientPeers, ValueError) as e:
+        return sel.summary(), "", f"可比分析（{e}）"
+    comps_facts(table, r.ledger)
+    return (f"{sel.summary()}\n{table.summary()}",
+            f"{sel.for_prompt()}\n" + table.for_prompt(ledger=r.ledger, as_of=as_of, spot=spot), "")
+
+
 def _load_comps(code: str, r, as_of: date, snapshot_dir) -> tuple[str, str, str]:
     """可比公司分析入账本。返回 (给人看的摘要, 给模型看的口径, 失败说明)。
 
@@ -1130,7 +1237,7 @@ def _load_comps(code: str, r, as_of: date, snapshot_dir) -> tuple[str, str, str]
     from ir_agent.market import is_us
 
     if is_us(code):
-        return "", "", "可比（美股在阶段 4 与相对估值样本一并接入）"
+        return _load_comps_us(code, r, as_of)
     from ir_agent.comparables import NoComparables, select
     from ir_agent.comps import (
         InsufficientPeers,

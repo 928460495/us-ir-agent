@@ -108,7 +108,9 @@ class Selection:
         return [s.code for s in self.chosen]
 
     def summary(self) -> str:
-        yi = lambda v: f"{v / Decimal('1e8'):,.0f} 亿"      # noqa: E731
+        from ir_agent.market import is_us
+        unit = "亿美元" if is_us(self.target) else "亿"
+        yi = lambda v: f"{v / Decimal('1e8'):,.0f} {unit}"      # noqa: E731
         lines = [f"可比公司 {len(self.chosen)} 家"
                  f"（自 {self.universe} 家同业中按市值就近选取）"]
         if self.target_cap is not None:
@@ -136,6 +138,21 @@ class Selection:
                 "  （按市值就近而非取最大者 —— 规模差两个数量级的 PE/PB 不可比）")
 
 
+def nearest(sized: list[Sized], target: str,
+            n: int = DEFAULT_N) -> tuple[list[Sized], Sized | None]:
+    """按市值排序后取标的的 n 家近邻（标的取不到市值时取最大的 n 家）。A 股、美股共用。"""
+    ordered = sorted(sized, key=lambda s: s.market_cap, reverse=True)
+    me = next((s for s in ordered if s.code == target), None)
+    others = [s for s in ordered if s.code != target]
+    if me is None:
+        return others[:n], None
+    idx = ordered.index(me)
+    # 以标的为中心向两侧扩张，先近后远
+    chosen = sorted(others, key=lambda s: abs(ordered.index(s) - idx))[:n]
+    chosen.sort(key=lambda s: s.market_cap, reverse=True)
+    return chosen, me
+
+
 def select(peers, n: int = DEFAULT_N,
            session: requests.Session | None = None) -> Selection:
     """从 Peers 中挑出 n 家市值近邻。
@@ -148,19 +165,7 @@ def select(peers, n: int = DEFAULT_N,
     if not sized:
         raise NoComparables(f"{peers.target}: 同业市值全部取不到，无法挑选可比公司")
 
-    ordered = sorted(sized, key=lambda s: s.market_cap, reverse=True)
-    me = next((s for s in ordered if s.code == peers.target), None)
-    others = [s for s in ordered if s.code != peers.target]
-
-    if me is None:
-        chosen = others[:n]
-    else:
-        idx = ordered.index(me)
-        # 以标的为中心向两侧扩张，先近后远
-        chosen = sorted(others,
-                        key=lambda s: abs(ordered.index(s) - idx))[:n]
-        chosen.sort(key=lambda s: s.market_cap, reverse=True)
-
+    chosen, me = nearest(sized, peers.target, n)
     if not chosen:
         raise NoComparables(f"{peers.target}: 剔除后无可比公司")
     return Selection(target=peers.target, chosen=chosen,
