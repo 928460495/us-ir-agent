@@ -48,3 +48,29 @@ def test_审核者首年锚定说明_美股写10K基期():
     cn = "\n".join(_anchor_lines(SimpleNamespace(code="600183", margin_bases=mb), anchor))
     assert "10-K 基期" in us and "年报基期" not in us
     assert "年报基期" in cn
+
+
+def test_批准清单锚定横幅_美股指向1_Assumptions且写10K基期():
+    from ir_agent import full
+    cal = {"interim": {"fy_rev": 110.0, "fy_cogs": 60.0, "k": 3, "g_rev": 0.1, "g_cogs": 0.05,
+                       "label": "前 3 个季度"},
+           "rev": {"2025": 100.0}, "periods": {"annual": ["2025"]}}
+    us = full._anchor_banner(cal, ["FY2026E"], rebased=True, us=True)
+    cn = full._anchor_banner(cal, ["FY2026E"], rebased=True)
+    assert "1_Assumptions" in us and "1_假设" not in us and "10-K 基期" in us and "年报基期" not in us
+    assert "1_假设" in cn and "年报基期" in cn
+
+
+def test_研报判断项附录_美股工作簿页名与基期写法():
+    from ir_agent import full
+    a = SimpleNamespace(code="AAPL", margin_rebased=lambda: True)
+    import pytest
+    mp = pytest.MonkeyPatch()
+    mp.setattr(assume, "unverified_labels", lambda a: [])
+    mp.setattr(assume, "estimated_labels", lambda a: [])
+    try:
+        line, body = full._assumption_caveats(a, anchor_note="首年锚定")
+    finally:
+        mp.undo()
+    assert "1_Assumptions" in body and "1_假设" not in body
+    assert "10-K 基期" in line + body and "年报基期" not in line + body

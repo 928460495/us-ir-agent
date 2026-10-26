@@ -2452,6 +2452,8 @@ def _assumption_caveats(a, anchor_note: str = "", unreviewed: str = "",
             and not unreviewed and not qual_unreviewed):
         return "", ""
 
+    from ir_agent.market import is_us
+    sheet, base = _workbook_words(is_us(getattr(a, "code", "") or "000000"))
     says: list[str] = []
     # 人改过、未经 AI 审核：读者必须知道这份判断项没有审核者背书（子项目三）。
     if unreviewed:
@@ -2468,8 +2470,8 @@ def _assumption_caveats(a, anchor_note: str = "", unreviewed: str = "",
         # I3：这句不能带阿拉伯数字（进提示词，会被裸数字审计判掉）——
         # 「第二年」用汉字数字，不写成「第 2 年」。具体数字在
         # assumptions.md 与下面的 body 附录里给。
-        says.append("**从第二年起，毛利率的合成基期已从年报基期改为"
-                    "锚定后的首年水平**，不能用年报基期加累计变化手算复现")
+        says.append(f"**从第二年起，毛利率的合成基期已从{base}改为"
+                    f"锚定后的首年水平**，不能用{base}加累计变化手算复现")
     if unverified:
         says.append("部分 DCF 判断项的依据**未能逐字核验**——出处是转述"
                     "而非原文引用")
@@ -2491,10 +2493,10 @@ def _assumption_caveats(a, anchor_note: str = "", unreviewed: str = "",
     if anchor_note:
         body += [f"**{anchor_note}**", "",
                  "季度估算的明细（去年各季、本年已公布各季、年初至今同比）见工作簿"
-                 "「1_假设」第三小节。", ""]
+                 f"「{sheet}」第三小节。", ""]
     if rebased:
         body += ["**第 2 年起毛利率的加法链基期已改为锚定后的首年水平**"
-                 "（不是年报基期），因此合成结果无法用「年报基期 + 累计 pp」"
+                 f"（不是{base}），因此合成结果无法用「{base} + 累计 pp」"
                  "手算复现——这是刻意的处理（保留模型判断的逐年变化，起点换成"
                  "按季度估算的首年水平），不是取值出错。", ""]
     if estimated:
@@ -3118,7 +3120,12 @@ def run_assume(code: str, r, as_of: date, out_dir: str | Path,
         cost_usd=Decimal(str(assume_client.total_cost_usd)), phase="assume")
 
 
-def _anchor_banner(cal: dict, labels: list[str], rebased: bool = False) -> str:
+def _workbook_words(us: bool) -> tuple[str, str]:
+    """(假设页的页名, 毛利率基期的叫法)：us-dcf 的假设页叫 1_Assumptions，基期取自 10-K。"""
+    return ("1_Assumptions", "10-K 基期") if us else ("1_假设", "年报基期")
+
+
+def _anchor_banner(cal: dict, labels: list[str], rebased: bool = False, us: bool = False) -> str:
     """批准清单顶部的锚定横幅：首个预测年会被已披露中期覆盖。
 
     人在第一阶段批准首年的营收增速与毛利率，要到第二阶段建模时才会被
@@ -3152,9 +3159,10 @@ def _anchor_banner(cal: dict, labels: list[str], rebased: bool = False) -> str:
                                 base_rev=float(base_rev))
     k = int(it.get("k") or 0)
     qs = "Q1" + (f"–Q{k}" if k > 1 else "")
+    sheet, base = _workbook_words(us)
     rebase_note = (
-        "**第 2 年起毛利率的加法链基期也已从年报基期改为锚定后的首年"
-        "水平**，因此这些年份同样不能用「年报基期 + 累计 pp」手算复现——"
+        f"**第 2 年起毛利率的加法链基期也已从{base}改为锚定后的首年"
+        f"水平**，因此这些年份同样不能用「{base} + 累计 pp」手算复现——"
         "批准时请核对下表显示的合成结果本身，而不是自己重新加总；"
         if rebased else "批准时请把注意力放在后续年份；")
     return (f"> ⚠ **{first} 将由{it.get('label') or '已披露中期'}锚定**：按季度估算——"
@@ -3162,7 +3170,7 @@ def _anchor_banner(cal: dict, labels: list[str], rebased: bool = False) -> str:
             f"{float(it.get('g_rev') or 0):+.2%}、营业成本 {float(it.get('g_cogs') or 0):+.2%}），"
             f"三档相同：生效营收增速约 {g1:.2%}、毛利率约 {m1:.2%}。"
             f"下表 {first} 的取值**不进模型**，{rebase_note}"
-            "季度明细见工作簿「1_假设」第三小节。\n\n")
+            f"季度明细见工作簿「{sheet}」第三小节。\n\n")
 
 
 def _propose_assumptions(code, r, body, md, as_of, out, client, arts,
@@ -3224,7 +3232,7 @@ def _propose_assumptions(code, r, body, md, as_of, out, client, arts,
                 "—— 模型接口问题，原样重跑 --assume 即可")
 
     (out / ASSUMPTIONS_MD).write_text(
-        _anchor_banner(cal, labels, rebased=a.margin_rebased()) + a.describe()
+        _anchor_banner(cal, labels, rebased=a.margin_rebased(), us=_is_us_run(r)) + a.describe()
         + _APPROVE_NOTE.format(js=ASSUMPTIONS_JSON),
         encoding="utf-8")
     (out / ASSUMPTIONS_JSON).write_text(
