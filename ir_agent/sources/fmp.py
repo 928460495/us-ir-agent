@@ -26,12 +26,20 @@ TIMEOUT = 20
 LIMIT = 5                                   # 免费档上限，超过返回 402
 
 # (端点, 期间类型) → {FMP 字段: 账本键}
+# 字段要够 FMP 自己跑至少两条勾稽（资产恒等、毛利、现金），否则跨源勾稽里它「覆盖不足，
+# 不计入佐证」—— 2026-10-26 AAPL 重跑实测 FMP 0/5 项。
 _FLOWS = {"revenue": "revenue", "operatingIncome": "operating_profit",
-          "netIncome": "net_profit_attr_parent"}
-_STOCKS = {"totalAssets": "total_assets", "totalStockholdersEquity": "equity_attr_parent"}
+          "netIncome": "net_profit_attr_parent", "costOfRevenue": "cost_of_revenue",
+          "grossProfit": "gross_profit"}
+_STOCKS = {"totalAssets": "total_assets", "totalStockholdersEquity": "equity_attr_parent",
+           "totalLiabilities": "total_liabilities", "totalEquity": "total_equity"}
+# 现金流量表只取年度：季度是单季流量，期初现金对不上累计口径
+_CASH = {"cashAtEndOfPeriod": "cash_end", "cashAtBeginningOfPeriod": "cash_begin",
+         "netChangeInCash": "cash_net_change"}
 _CALLS = (("income-statement", "annual", _FLOWS), ("income-statement", "quarter", _FLOWS),
           ("balance-sheet-statement", "annual", _STOCKS),
-          ("balance-sheet-statement", "quarter", _STOCKS))
+          ("balance-sheet-statement", "quarter", _STOCKS),
+          ("cash-flow-statement", "annual", _CASH))
 
 
 class FmpUnavailable(Exception):

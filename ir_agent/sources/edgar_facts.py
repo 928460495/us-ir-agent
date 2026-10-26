@@ -56,6 +56,10 @@ _DURATION: dict[str, tuple[str, ...]] = {
     "sbc": ("ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"),
     "buyback": ("PaymentsForRepurchaseOfCommonStock",),
     "dividends_paid": ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"),
+    # 现金流量表的现金净增加额。首选含受限现金的口径 —— 与 cash_end 同一概念，ASC 230 自 2018 起的列报方式
+    "cash_net_change": (
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+        "CashAndCashEquivalentsPeriodIncreaseDecrease"),
 }
 _INSTANT: dict[str, tuple[str, ...]] = {
     "cash_and_equivalents": ("CashAndCashEquivalentsAtCarryingValue",
@@ -87,6 +91,9 @@ _INSTANT: dict[str, tuple[str, ...]] = {
     "minority_equity": ("MinorityInterest",),
     "total_equity": ("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
                      "StockholdersEquity"),
+    # 现金流量表的期末现金（含受限现金），与资产负债表的 cash_and_equivalents 不是同一口径
+    "cash_end": ("CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+                 "CashAndCashEquivalentsAtCarryingValue"),
 }
 _SHARES_DURATION: dict[str, tuple[str, ...]] = {
     "diluted_shares": ("WeightedAverageNumberOfDilutedSharesOutstanding",),
@@ -199,7 +206,7 @@ def parse_companyfacts(doc: dict, fye_mmdd: str, source_id: str,
                       source_id, money=True)
 
     out += _cover_page_shares(doc.get("facts", {}).get("dei", {}), source_id)
-    return out + _revenue_total(out)
+    return out + _revenue_total(out) + _cash_begin(out)
 
 
 def _revenue_total(facts: list[Fact]) -> list[Fact]:
@@ -210,6 +217,23 @@ def _revenue_total(facts: list[Fact]) -> list[Fact]:
                  period=f.period, as_of=f.as_of, source_id=f.source_id, method=Method.COMPUTED,
                  derived_from=(f"revenue@{f.period}",))
             for f in facts if f.key == "revenue"]
+
+
+def _cash_begin(facts: list[Fact]) -> list[Fact]:
+    """期初现金 = 上一财年末的期末现金。XBRL 里期初数就是同一标签在更早时点的值，
+    没有单独的「期初」标签；累计期间（Q1 / H1 / Q1-Q3 / FY）的起点都是上一财年末。"""
+    ends: dict[str, list[Fact]] = {}
+    for f in facts:
+        if f.key == "cash_end" and f.period.endswith("FY"):
+            ends.setdefault(f.period, []).append(f)
+    periods = {f.period for f in facts if f.key == "cash_net_change"}
+    out = []
+    for p in sorted(periods):
+        for e in ends.get(f"{int(p[:4]) - 1}FY", []):
+            out.append(Fact(key="cash_begin", value=e.value, unit=e.unit, currency=e.currency,
+                            period=p, as_of=e.as_of, source_id=e.source_id,
+                            method=Method.COMPUTED, derived_from=(f"cash_end@{e.period}",)))
+    return out
 
 
 class NoUsGaapFacts(Exception):

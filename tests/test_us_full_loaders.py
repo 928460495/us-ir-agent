@@ -39,14 +39,14 @@ def test_A股宏观路径不变(monkeypatch):
     assert "CPI" in human
 
 
-def test_美股无风险利率取美债十年且β留待阶段3(monkeypatch):
+def test_美股无风险利率取美债十年_β注明由估值阶段计算(monkeypatch):
     monkeypatch.setattr(fred, "fetch_series_asof", lambda sid, as_of, store: [
         _f("rate.ust_10y", "2025-11-12", "0.0412"), _f("rate.ust_10y", "2025-11-13", "0.0408")])
     r = _run()
     human, prompt, err = full._load_capm("AAPL", r, AS_OF)
     assert "4.08%" in human and "美国十年期国债" in human
     assert "[[rate.ust_10y@2025-11-13]]" in prompt
-    assert "β" in err and "阶段 3" in err
+    assert err == "" and "us-dcf" in human            # β 已在阶段 3 接入估值阶段，不再报「未生成」
 
 
 def test_美股行业给出FF49同业名单且聚合留待后续阶段(monkeypatch):

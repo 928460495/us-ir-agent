@@ -53,7 +53,7 @@ def _route(url, params=None, timeout=None, headers=None):
     if "tiingo" in url:
         return R([{"date": "2025-11-12T00:00:00+00:00", "close": 270.0}])
     rows = {"income-statement": FMP_INCOME, "balance-sheet-statement": FMP_BALANCE}
-    return R(rows[url.rsplit("/", 1)[-1]] if params.get("period") == "annual" else [])
+    return R(rows.get(url.rsplit("/", 1)[-1], []) if params.get("period") == "annual" else [])
 
 
 @pytest.fixture

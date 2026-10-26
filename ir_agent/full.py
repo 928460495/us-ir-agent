@@ -785,7 +785,8 @@ def _load_macro_us(r, as_of: date) -> tuple[str, str, str]:
 
 
 def _load_capm_us(r, as_of: date) -> tuple[str, str, str]:
-    """美股：无风险利率取美国十年期国债（FRED DGS10，当时版本）。β 在阶段 3 随 us-dcf 接入。"""
+    """美股：无风险利率取美国十年期国债（FRED DGS10，当时版本）。β 不在这里算 —— 由估值阶段的
+    us-dcf 回归（与 WACC 同一处），这里只说明口径，不报「未生成」。"""
     from ir_agent.periods import sort_key
     from ir_agent.sources import fred
     from ir_agent.sources.macro import MacroUnavailable
@@ -804,7 +805,7 @@ def _load_capm_us(r, as_of: date) -> tuple[str, str, str]:
             prompt.append(f"  无风险利率（美国十年期国债）　[[rate.ust_10y@{f.period}]]")
     except MacroUnavailable as e:
         errs.append(f"无风险利率（{e}）")
-    errs.append("β（美股版在阶段 3 接入 us-dcf 的五年月度 β 与 Blume 调整）")
+    human.append("  β　估值阶段由 us-dcf 以五年日收益对标普 500 回归并做 Blume 调整（与 WACC 同一处计算）")
     return "\n".join(human), "\n".join(prompt), "；".join(errs)
 
 

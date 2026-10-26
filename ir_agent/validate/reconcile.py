@@ -19,7 +19,7 @@ DEFAULT_REL_TOL = Decimal("0.0005")   # 5bp，容纳财报四舍五入
 @dataclass(frozen=True)
 class CheckResult:
     name: str
-    status: str                      # "passed" | "failed" | "skipped"
+    status: str                      # "passed" | "failed" | "skipped" | "n/a"
     diff: Decimal | None = None
     detail: str = ""
 
@@ -36,7 +36,7 @@ class ReconcileReport:
 
     @property
     def checks_run(self) -> int:
-        return sum(1 for r in self.results if r.status != "skipped")
+        return sum(1 for r in self.results if r.status in ("passed", "failed"))
 
     @property
     def ok(self) -> bool:
@@ -45,15 +45,18 @@ class ReconcileReport:
     @property
     def complete(self) -> bool:
         """所有校验都拿到了数据 —— 覆盖率与通过率必须分开看。"""
-        return all(r.status != "skipped" for r in self.results)
+        return all(r.status != "skipped" for r in self.results)     # 不适用不算缺口
 
     def summary(self) -> str:
         head = f"{self.period} @ {self.as_of.isoformat()}"
         state = "通过" if self.ok else f"失败 {len(self.failures)} 项"
         cover = "完整" if self.complete else "覆盖不完整"
-        lines = [f"三表勾稽 {head}: {state}（{self.checks_run}/{len(self.results)} 项已执行，{cover}）"]
+        na = sum(1 for r in self.results if r.status == "n/a")
+        na_note = f"，{na} 项不适用" if na else ""
+        lines = [f"三表勾稽 {head}: {state}（{self.checks_run}/{len(self.results) - na} 项已执行，"
+                 f"{cover}{na_note}）"]
         for r in self.results:
-            mark = {"passed": "✓", "failed": "✗", "skipped": "–"}[r.status]
+            mark = {"passed": "✓", "failed": "✗", "skipped": "–", "n/a": "○"}[r.status]
             lines.append(f"  {mark} {r.name}{'  ' + r.detail if r.detail else ''}")
         return "\n".join(lines)
 
@@ -67,6 +70,35 @@ _IDENTITIES: list[tuple[str, str, tuple[str, ...]]] = [
     ("期末现金=期初+净增加额", "cash_end", ("cash_begin", "cash_net_change")),
     ("利润表净利润=现金流量表起点", "net_profit", ("cf_net_profit",)),
 ]
+
+
+# 美股：两条恒等式在 XBRL 里左右两边是同一个标签，「通过」是恒等而非核对 —— 标不适用，
+# 不能算进已执行（那是假绿灯），也不该报「缺数据」（那会让人去找一个本来就不存在的数）。
+_NA_US_NO_NCI = ("未报告非控制性权益（NetIncomeLossAttributableToNoncontrollingInterest），"
+                 "净利润即归母净利润，核对恒等")
+_NA_US_CF_START = ("US GAAP 现金流量表起点与利润表净利润是同一 XBRL 标签"
+                   "（ProfitLoss / NetIncomeLoss），核对恒等")
+
+
+def _not_applicable(ledger: FactLedger, name: str, period: str, as_of: date) -> str:
+    """美股（净利润以美元计）下不适用的恒等式 → 原因；其余返回空串。"""
+    try:
+        if ledger.get("net_profit", period, as_of=as_of).currency != "USD":
+            return ""
+    except KeyError:
+        return ""
+    if name == "利润表净利润=现金流量表起点":
+        return _NA_US_CF_START
+    if name == "净利润=归母+少数股东损益" and not any(
+            k == "minority_interest_profit" for k, _p in ledger._facts):    # noqa: SLF001
+        # 报了 ProfitLoss（含非控制性权益）却不单列少数股东损益时两者会不同 —— 那是真缺数，照旧跳过
+        try:
+            same = (ledger.get("net_profit", period, as_of=as_of).value
+                    == ledger.get("net_profit_attr_parent", period, as_of=as_of).value)
+        except KeyError:
+            same = False
+        return _NA_US_NO_NCI if same else ""
+    return ""
 
 
 def _within(diff: Decimal, scale: Decimal, abs_tol: Decimal, rel_tol: Decimal) -> bool:
@@ -83,6 +115,9 @@ def reconcile(
     report = ReconcileReport(period=period, as_of=as_of)
 
     for name, lhs_key, rhs_keys in _IDENTITIES:
+        if (why := _not_applicable(ledger, name, period, as_of)):
+            report.results.append(CheckResult(name=name, status="n/a", detail=f"不适用：{why}"))
+            continue
         needed = [lhs_key] + [k.lstrip("-") for k in rhs_keys]
         values: dict[str, Decimal] = {}
         missing: list[str] = []
