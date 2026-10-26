@@ -947,7 +947,10 @@ def _load_industry_us(code: str, r, as_of: date) -> tuple[str, str, str]:
         f = cache.get(c, {}).get(("revenue", period))
         return None if f is None or f.as_of > when else f.value
 
-    agg = aggregate(peers, r.period, prior, as_of, fetch)
+    # 行业指标用按 SIC 收窄的样本（用户 2026-10-26 选 B）；r.peer_set 保持全 FF49 给回归与可比
+    ind = us_industry.narrow(peers, peers.classification.path)
+    r.industry_set = ind
+    agg = aggregate(ind, r.period, prior, as_of, fetch)
     for f in industry_facts(agg):
         r.ledger.put(f)
 
@@ -959,14 +962,19 @@ def _load_industry_us(code: str, r, as_of: date) -> tuple[str, str, str]:
             me[(k, per)] = max(seen, key=lambda f: f.as_of)
     prof_md = prof_pr = ""
     try:
-        prof_md, prof_pr = _industry_profile(peers, agg, {**cache, peers.target: me}, r, as_of)
+        ind_cache = {m.code: cache[m.code] for m in ind.members if m.code in cache}
+        prof_md, prof_pr = _industry_profile(ind, agg, {**ind_cache, peers.target: me}, r, as_of)
     except Exception as e:                                  # noqa: BLE001
         prof_md = f"（行业画像未生成：{e.__class__.__name__}）"
 
     stat_md, stat_pr = _industry_stats_us(peers, r, as_of, errs)
     dropped = len(peers.members) - len(books)
+    narrowed = ind is not peers
     head = (f"{peers.summary()}\n  同业财报：{len(books)} 家取到，{dropped} 家剔除；"
             "年度数按期末最近的财年对齐到本司财年"
+            + (f"\n  行业指标（集中度、市占率、行业中位数）的样本：{ind.classification.used_path}，"
+               f"{len(ind.members)} 家；相对估值的回归样本仍为全 FF49 行业" if narrowed
+               else "\n  行业指标的样本：全 FF49 行业（同 SIC 同业不足五家）")
             + "".join(f"\n    – {n}" for n in r.peer_notes))
     return (f"{head}\n{agg.summary()}\n{prof_md}\n{stat_md}".rstrip(),
             f"{agg.for_prompt()}\n{prof_pr}\n{stat_pr}".rstrip(), "；".join(errs))

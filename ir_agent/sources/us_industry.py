@@ -136,6 +136,32 @@ class UsClassification(Classification):
         return f"Fama-French 49 行业「{self.used_path}」（SIC {self.path}）"
 
 
+def narrow(peers: Peers, target_sic: str, min_peers: int = MIN_PEERS) -> Peers:
+    """行业样本按 SIC 由窄到宽：同码及其上位码（3571 与 3570）→ 同三位码（357x）→ 全 FF49。
+    够 min_peers 家就停在那一级 —— 与 A 股申万「取最细一级、不够才回退」同一做法。
+
+    行业集中度、市占率、行业中位数要的是**同一类公司**；FF49-35 把电脑、网络设备、安全软件、
+    存储装在一起（AAPL 实跑：三个审核者都指出混合样本）。相对估值的回归仍用全 FF49（要几十家），
+    不经过这里（用户 2026-10-26 选 B）。SIC 只有当前值（设计「六」已知限制）。
+    """
+    sic = target_sic if len(target_sic) == 4 and target_sic.isdigit() else ""
+    if not sic or not peers.sic_of:
+        return peers
+    base = peers.classification.used_path
+    levels = [({sic, sic[:3] + "0"},
+               f"SIC {sic}" + (f" 与上位码 {sic[:3]}0" if sic[3] != "0" else "") + f"（{base} 内）"),
+              ({f"{sic[:3]}{d}" for d in "0123456789"}, f"SIC {sic[:3]}x（{base} 内）")]
+    for codes, label in levels:
+        members = [m for m in peers.members if peers.sic_of.get(m.code) in codes]
+        if len(members) >= min_peers:
+            cls = UsClassification(code=peers.classification.code, name=peers.classification.name,
+                                   path=peers.classification.path, used_path=label, level=2)
+            return Peers(target=peers.target, target_name=peers.target_name, classification=cls,
+                         members=members, excluded=[], thin=False,
+                         sic_of={m.code: peers.sic_of[m.code] for m in members})
+    return peers
+
+
 def peer_set_us(ticker: str, store, min_peers: int = MIN_PEERS) -> Peers:
     """标的的 FF49 行业与同业集合，与 sources.industry.peer_set 同一返回类型。"""
     tickers, _ = edgar.load_tickers(store)
@@ -175,6 +201,7 @@ def peer_set_us(ticker: str, store, min_peers: int = MIN_PEERS) -> Peers:
                 out.excluded.append((codes[0], info.name, f"交易所 {info.exchange or '未知'}，非 NYSE / Nasdaq"))
                 continue
             out.members.append(Member(codes[0], info.name))
+            out.sic_of[codes[0]] = str(s)
     if no_ticker:
         out.excluded.append(("", "", f"SEC 代码表中无交易代码的公司 {no_ticker} 家（多为已退市或未上市）"))
     if not out.members:

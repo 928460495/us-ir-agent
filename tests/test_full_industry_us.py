@@ -120,3 +120,47 @@ def test_A股行业总营收单位仍是元():
     facts = {f.key: f for f in industry_facts(agg)}
     if "industry.revenue" in facts:
         assert facts["industry.revenue"].unit == "元"
+
+
+# ── 行业样本按 SIC 由窄到宽（用户 2026-10-26 选 B）──────────────────────
+
+def _peers_with_sic(sics: dict[str, str]):
+    return Peers(target="AAPL", target_name="Apple Inc.",
+                 classification=UsClassification(code="AAPL", name="Apple Inc.", path="3571",
+                                                 used_path="FF49-35 Hardw 计算机", level=1),
+                 members=[Member(t, t) for t in sics], sic_of=dict(sics))
+
+
+def test_同码与上位码够五家就停在这一级():
+    from ir_agent.sources.us_industry import narrow
+    sics = {"DELL": "3571", "SMCI": "3571", "HPQ": "3570", "HPE": "3570", "IBM": "3570",
+            "CSCO": "3576", "STX": "3572", "PANW": "3577"}
+    ind = narrow(_peers_with_sic(sics), "3571")
+    assert {m.code for m in ind.members} == {"DELL", "SMCI", "HPQ", "HPE", "IBM"}
+    assert "SIC 3571" in ind.classification.used_path and "FF49-35" in ind.classification.used_path
+    assert ind.target == "AAPL" and not ind.thin
+
+
+def test_同码不足五家退到三位码_再不足退回FF49():
+    from ir_agent.sources.us_industry import narrow
+    sics = {"DELL": "3571", "CSCO": "3576", "STX": "3572", "PANW": "3577", "NTAP": "3572", "X": "3672"}
+    ind = narrow(_peers_with_sic(sics), "3571")
+    assert {m.code for m in ind.members} == {"DELL", "CSCO", "STX", "PANW", "NTAP"}
+    assert "357x" in ind.classification.used_path
+    few = narrow(_peers_with_sic({"DELL": "3571", "X": "3672", "Y": "3674"}), "3571")
+    assert {m.code for m in few.members} == {"DELL", "X", "Y"}
+    assert few.classification.used_path == "FF49-35 Hardw 计算机"
+
+
+def test_行业聚合用收窄后的样本_回归样本仍是全FF49(r, monkeypatch):
+    from ir_agent.sources import us_industry
+    peers = us_industry.peer_set_us("AAPL", None)
+    peers.sic_of = {"DELL": "3571", "HPQ": "3570", "SMCI": "3571", "IFRS": "3571"}
+    peers.members += [Member("CSCO", "Cisco"), Member("HPE", "Hpe")]
+    peers.sic_of.update(CSCO="3576", HPE="3570")             # HPE 没有财报：计入样本、记为缺失
+    monkeypatch.setattr(us_industry, "peer_set_us", lambda code, st: peers)
+    human, _m, _e = full._load_industry_us("AAPL", r, AS_OF)
+    assert r.ledger.get("industry.peer_count", "2025FY", as_of=AS_OF).value == 4   # 本司 + DELL/HPQ/SMCI
+    assert {m.code for m in r.industry_set.members} == {"DELL", "HPQ", "SMCI", "IFRS", "HPE"}
+    assert {m.code for m in r.peer_set.members} >= {"CSCO", "DELL"}                # 回归样本不收窄
+    assert "SIC 3571" in human

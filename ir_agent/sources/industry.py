@@ -72,6 +72,8 @@ class Peers:
     members: list[Member] = field(default_factory=list)
     excluded: list[tuple[str, str, str]] = field(default_factory=list)
     thin: bool = False
+    # 美股：同业代码 → SEC 当前 SIC（枚举时记下）。按 SIC 收窄行业样本用；A 股不填
+    sic_of: dict[str, str] = field(default_factory=dict)
 
     @property
     def codes(self) -> list[str]:
