@@ -260,7 +260,9 @@ PROMPT_US = PROMPT.replace("为一份 A 股研究报告", "为一份美股研究
     "- 优先美国政府统计（Census、BEA、BLS、EIA 等）、监管机构、行业协会、一手市场研究机构的\n"
     "  原始页面，其次财经媒体。\n"
     "- 一手机构的新闻稿若原站拒绝访问，改给同一份新闻稿在 Business Wire、PR Newswire、\n"
-    "  GlobeNewswire 或该机构 / 公司新闻室的转载页；发布机构仍写原机构。")
+    "  GlobeNewswire 或该机构 / 公司新闻室的转载页；发布机构仍写原机构。\n"
+    "- 不要给 sec.gov 上的申报文件（10-K、10-Q、8-K 已由 EDGAR 直接入库）。\n"
+    "- 只给 HTML 网页，不要 PDF（抓不了）；联邦公报等有网页版的给网页版。")
 
 
 # ── 抓取与正文提取 ──────────────────────────────────────────────
@@ -1030,6 +1032,10 @@ def gather(client, *, code: str, company: str, industry: str,
         if per_slot.get(cand.slot, 0) >= PER_SLOT:
             continue
         if cand.url in seen:
+            continue
+        if _matches(_host_of(cand.url), "sec.gov"):
+            # SEC 申报文件由 EDGAR 模块带身份请求头取、按 COMPANY 入库；这里没有 SEC 身份
+            # （AAPL 实跑 403），抓到了也只会被降成 MEDIA 重复入库 —— 不是缺失，是走另一条路
             continue
         try:
             got = fetch(cand.url)

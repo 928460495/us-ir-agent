@@ -118,3 +118,19 @@ def test_A股开放网络检索提示逐字不变(monkeypatch):
     p = _prompt_seen(monkeypatch, "600183")
     assert p == openweb.PROMPT.format(company="X", code="600183", industry="Y",
                                       per_slot=openweb.PER_SLOT, as_of=AS_OF.isoformat())
+
+
+def test_开放网络不抓sec_gov_申报文件已由EDGAR入库(monkeypatch):
+    from ir_agent.sources import openweb
+    called = []
+    monkeypatch.setattr(openweb, "fetch", lambda url, **k: called.append(url))
+    line = ("候选: 公司重大动态 | 8-K | https://www.sec.gov/Archives/edgar/data/320193/x/a8-k.htm"
+            " | Apple | 2026-07-30")
+    res = openweb.gather(lambda p: line, code="AAPL", company="Apple", industry="x", as_of=AS_OF,
+                         corpus=Corpus(as_of=AS_OF))
+    assert called == [] and res.fetch_failed == 0
+
+
+def test_美股检索提示说明不要sec_gov申报与PDF(monkeypatch):
+    p = _prompt_seen(monkeypatch, "AAPL")
+    assert "sec.gov" in p and "PDF" in p
