@@ -150,3 +150,24 @@ def test_纪要文档带渠道标记(tmp_path, monkeypatch):
          "transcripts": [{"paragraph_number": 1, "speaker": "Tim", "content": "hi"}]}])
     docs, _ = transcripts.fetch_transcripts("AAPL", AS_OF, SnapshotStore(tmp_path))
     assert [d.channel for d in docs] == ["transcript"]
+
+
+def test_多条行业规模时取有外部依据的那条_账本复述不算外部规模():
+    from ir_agent import value_chain as VC
+    corpus = Corpus(as_of=AS_OF)
+    corpus.add(_doc("ow_idc", "https://idc.com/phones",
+                    "The global smartphone market shrank 22.0% year-on-year to 255.3 million units in 3Q26"))
+    text = ("行业规模: 账本同业样本营收合计 | 8622.73 | 亿美元 | 2025FY | [[industry.revenue@2025FY]]\n"
+            "行业规模: 全球智能手机出货量 | 255.3 | 百万台 | 2026Q3 | 「The global smartphone market shrank "
+            "22.0% year-on-year to 255.3 million units in 3Q26」——IDC《phones》\n")
+    view = VC.parse(text, corpus)
+    assert view.size is not None and view.size.value == D("255.3")
+
+
+def test_只有账本依据的行业规模不另记外部规模_也不报错(tmp_path):
+    from ir_agent import full
+    from ir_agent.basis import Basis
+    from ir_agent.value_chain import SizeClaim
+    size = SizeClaim(label="账本合计", value=D(1), unit="亿美元", period="2025FY",
+                     bases=[Basis.fact("[[industry.revenue@2025FY]]")])
+    assert full._size_source(size, Corpus(as_of=AS_OF), SnapshotStore(tmp_path)) == (None, "")

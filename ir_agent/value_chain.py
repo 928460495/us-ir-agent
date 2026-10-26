@@ -34,7 +34,7 @@ from enum import Enum
 from ir_agent.lineparse import keyed, pick
 from ir_agent.ledger import Fact, FactLedger, LookAheadError, Method
 from ir_agent.sources.external import attribute
-from ir_agent.basis import Basis, validate
+from ir_agent.basis import Basis, BasisKind, validate
 from ir_agent import qual_review as Q
 
 
@@ -187,8 +187,10 @@ def parse(text: str, corpus=None) -> ChainView:
             note("议价给了「本环节」—— 议价只对上游与下游而言，这一行没读进来")
             continue
         view.power[Role(r_)] = Power(p_)
-    m = _SIZE.search(text)
-    if m:
+    # 撰写者有时给多行（AAPL 实跑：先复述账本同业营收合计，再给 IDC 出货量）。只读第一行会让
+    # 真正的外部口径被丢掉 —— 逐行读，优先取有账本外依据的那一行；都只有账本依据就取第一行。
+    claims: list[SizeClaim] = []
+    for m in _SIZE.finditer(text):
         p = _cells(m.group(1))
         num = _NUM.search(p[1].replace(",", "")) if len(p) > 1 else None
         if len(p) < 5:
@@ -199,8 +201,10 @@ def parse(text: str, corpus=None) -> ChainView:
             bases, prob, cites = Q.basis(" | ".join(p[4:]), corpus)
             if prob:
                 note(f"行业规模的依据：{prob}")
-            view.size = SizeClaim(label=p[0], value=Decimal(num.group(0)), unit=p[2],
-                                  period=p[3], bases=bases, cites=cites)
+            claims.append(SizeClaim(label=p[0], value=Decimal(num.group(0)), unit=p[2],
+                                    period=p[3], bases=bases, cites=cites))
+    external = [c for c in claims if any(b.kind is not BasisKind.FACT for b in c.bases)]
+    view.size = (external or claims or [None])[0]
     return view
 
 

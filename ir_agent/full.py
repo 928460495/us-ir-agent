@@ -773,7 +773,10 @@ def _size_source(size, corpus, store) -> tuple[str | None, str]:
 
     from ir_agent.basis import BasisKind
 
-    for b in getattr(size, "bases", []) or []:
+    bases = getattr(size, "bases", []) or []
+    if bases and all(b.kind is BasisKind.FACT for b in bases):
+        return None, ""                 # 复述账本里的行业营收合计，不是外部口径，不另记
+    for b in bases:
         doc = None
         if b.kind is BasisKind.REPORT and b.quote and corpus is not None:
             doc = corpus.find(b.quote)
