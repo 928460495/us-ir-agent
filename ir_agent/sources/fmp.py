@@ -120,7 +120,7 @@ def fetch_statements_fmp(ticker: str, store, fye_mmdd: str,
 CONSENSUS_MAX_LAG_DAYS = 3      # FMP 只给当前快照：分析时点距今超过这么多天就拿不到「当时」的预期
 
 
-def _snapshot_rows(store, source: str, ticker: str, as_of: date) -> list | None:
+def _snapshot_rows(store, source: str, ticker: str, as_of: date) -> tuple[list, str] | None:
     """分析时点附近（±三天）已落的快照 —— 后续阶段读回它，不重新请求。
 
     时点守卫看的是**快照抓取日**与 as_of 的距离，不是「今天」：门①签名后隔几天再跑
@@ -143,8 +143,8 @@ def _snapshot_rows(store, source: str, ticker: str, as_of: date) -> list | None:
         if abs((got - as_of).days) > CONSENSUS_MAX_LAG_DAYS:
             continue
         if best is None or got > best[0]:
-            best = (got, d.get("payload"))
-    return best[1] if best and isinstance(best[1], list) else None
+            best = (got, d.get("payload"), d.get("source_id", ""))
+    return (best[1], best[2]) if best and isinstance(best[1], list) else None
 
 
 def fetch_consensus(ticker: str, fye_mmdd: str, as_of: date, store,
@@ -158,12 +158,14 @@ def fetch_consensus(ticker: str, fye_mmdd: str, as_of: date, store,
 
     from ir_agent.sources.reports import Consensus, Estimate
 
-    rows = _snapshot_rows(store, "fmp_analyst_estimates_annual", ticker, as_of)
-    if rows is None:
+    hit = _snapshot_rows(store, "fmp_analyst_estimates_annual", ticker, as_of)
+    if hit is not None:
+        rows, sid = hit
+    else:
         if as_of < (today or date.today()) - timedelta(days=CONSENSUS_MAX_LAG_DAYS):
             return None
         try:
-            rows, _sid = _get("analyst-estimates", ticker, "annual", _key(), store)
+            rows, sid = _get("analyst-estimates", ticker, "annual", _key(), store)
         except FmpUnavailable:
             return None
     eps: dict[int, Estimate] = {}
@@ -181,5 +183,5 @@ def fetch_consensus(ticker: str, fye_mmdd: str, as_of: date, store,
     if not eps:
         return None
     return Consensus(as_of=as_of, window_days=0, eps=eps, n_reports=0, stat="均值",
-                     provider="FMP 分析师预期，统计量为均值；分析时点的快照")
+                     provider="FMP 分析师预期，统计量为均值；分析时点的快照", source_id=sid)
 

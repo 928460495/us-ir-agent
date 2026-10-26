@@ -1148,7 +1148,7 @@ def _doc_to_json(d: Document) -> dict:
             "published": d.published.isoformat(),
             "retrieved": d.retrieved.isoformat(), "text": d.text,
             "prompt_limit": d.prompt_limit, "date_source": d.date_source,
-            "rank": d.rank}
+            "rank": d.rank, "channel": d.channel}
 
 
 def _str_field(raw: dict, key: str) -> str:
@@ -1225,7 +1225,9 @@ def _doc_from_json(raw: dict) -> Document:
                     text=_str_field(raw, "text"),
                     prompt_limit=prompt_limit, rank=rank,
                     date_source=_str_field(raw, "date_source")
-                    if "date_source" in raw else "")
+                    if "date_source" in raw else "",
+                    # 旧落盘文件没有 channel —— 缺省按本司公告读回
+                    channel=_str_field(raw, "channel") if "channel" in raw else "")
 
 
 def save(res: OpenWebResult, path: Path | str) -> None:

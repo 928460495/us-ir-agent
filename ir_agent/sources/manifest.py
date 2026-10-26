@@ -47,6 +47,13 @@ def missing_files(rows: list[SourceRow]) -> list[str]:
     return out
 
 
+# 分节顺序。COMPANY 级文档按渠道再分：本司公告、本司电话会纪要、竞争对手的法定披露 ——
+# 同级不同源，混在「公司公告」里会让人把对手的 10-K 当成本司公告去核。
+KINDS = ("账本事实", "外部文档", "公司公告", "电话会纪要（二手转存）", "同业披露（竞争对手 10-K）",
+         "年报 PDF", "年报（10-K）", "同业样本")
+_CHANNEL_KIND = {"transcript": "电话会纪要（二手转存）", "peer_filing": "同业披露（竞争对手 10-K）"}
+
+
 def render(rows: list[SourceRow], gaps: list[tuple[str, int]]) -> str:
     """生成 sources.md。`gaps` 是 (来源名, 本轮涉及的引用条数)。"""
     lines = ["# 资料来源清单（门①：请逐条核验）", "",
@@ -60,7 +67,7 @@ def render(rows: list[SourceRow], gaps: list[tuple[str, int]]) -> str:
             why = KNOWN_GAPS.get(name, "未保留原始接口响应")
             lines.append(f"- `{name}`：{why}（本轮涉及 {n} 条引用）")
         lines.append("")
-    for kind in ("账本事实", "外部文档", "公司公告", "年报 PDF", "同业样本"):
+    for kind in KINDS:
         part = [r for r in rows if r.kind == kind]
         if not part:
             continue
@@ -76,7 +83,7 @@ def render(rows: list[SourceRow], gaps: list[tuple[str, int]]) -> str:
 
 
 def collect_rows(ledger, corpus=None, pdf_dir=None, peers: tuple = (),
-                 annual: tuple | None = None) -> list[SourceRow]:
+                 annual: tuple | None = None, store=None, code: str = "") -> list[SourceRow]:
     """从账本、语料库、公告缓存、年报、同业名单汇总清单行。
 
     取不到的部分留空而不是编 —— 清单的价值在于它说的每一条都能点开。
@@ -88,7 +95,6 @@ def collect_rows(ledger, corpus=None, pdf_dir=None, peers: tuple = (),
     会列一行说出来。
     """
     rows: list[SourceRow] = []
-    seen: set[str] = set()
     # **`_facts` 是 `(key, period) -> list[Fact]`，值是一个桶而不是单条事实**
     # （`ledger.py:63`：`dict[tuple[str, str], list[Fact]]`，`put` 往
     # `setdefault(..., [])` 里 append）。写成 `f = ledger._facts[(key, per)]`
@@ -96,15 +102,21 @@ def collect_rows(ledger, corpus=None, pdf_dir=None, peers: tuple = (),
     # 后果有两层，都不报错：每条账本事实的「出处」是空的（而这张清单的全部
     # 价值就是每一条都能点开），且下面按 sid 去重时所有行都撞在 "" 上，
     # 整个账本事实小节只会剩一行。
+    # **一个快照一行**，标它支撑了几条事实、举一条为例，「本地文件」指向快照本身。
+    # 此前每个快照只列它碰巧排第一的那条事实（AAPL 实跑：整份 companyfacts 显示成
+    # 「revenue@2007FY」），本地文件一律空着 —— 人既看不出这一行代表什么，也点不开。
+    by_sid: dict[str, list] = {}
     for (key, per), bucket in getattr(ledger, "_facts", {}).items():  # noqa: SLF001
         for f in bucket:
-            sid = getattr(f, "source_id", "") or ""
-            if sid in seen:
-                continue
-            seen.add(sid)
-            rows.append(SourceRow(
-                kind="账本事实", label=f"{key}@{per}", origin=sid, local="",
-                retrieved=str(getattr(f, "as_of", "")), note=""))
+            by_sid.setdefault(getattr(f, "source_id", "") or "", []).append((key, per, f))
+    for sid, items in by_sid.items():
+        key, per, f = max(items, key=lambda t: str(getattr(t[2], "as_of", "")))
+        local = ""
+        if store is not None and sid and (p := store.path_for(sid)).exists():
+            local = str(p)
+        rows.append(SourceRow(
+            kind="账本事实", label=f"{len(items)} 条事实（如 {key}@{per}）", origin=sid,
+            local=local, retrieved=str(getattr(f, "as_of", "")), note=""))
     for d in (getattr(corpus, "docs", None) or []):
         # **按枚举成员比，不要按 str() 比。** `Tier` 是 `(str, Enum)` 混入类，
         # `str(Tier.COMPANY)` 给的是 `'Tier.COMPANY'` 而不是 `'COMPANY'`
@@ -122,7 +134,7 @@ def collect_rows(ledger, corpus=None, pdf_dir=None, peers: tuple = (),
             if (p := Path(pdf_dir) / name).exists():
                 local = str(p)
         rows.append(SourceRow(
-            kind="公司公告" if is_ann else "外部文档",
+            kind=(_CHANNEL_KIND.get(getattr(d, "channel", ""), "公司公告") if is_ann else "外部文档"),
             label=(getattr(d, "title", "") or "")[:40],
             origin=url,
             local=local,
@@ -131,23 +143,27 @@ def collect_rows(ledger, corpus=None, pdf_dir=None, peers: tuple = (),
     # **年报由年报地址定位，不扫缓存目录。** 上一版扫 `pdf_dir` 的 `*.pdf`
     # 当年报：那个目录里是公告；而文件名是大写 `.PDF`、glob 区分大小写，
     # 生益科技实跑时一个都没匹配上，这一节整个消失。
+    from ir_agent.market import is_us
+    us = bool(code) and is_us(code)
+    ann_kind = "年报（10-K）" if us else "年报 PDF"
     if annual is not None:
         url, path = annual
         if not url:
             rows.append(SourceRow(
-                kind="年报 PDF", label="未找到年报公告", origin="—", local="",
+                kind=ann_kind, label="未找到年报公告", origin="—", local="",
                 retrieved="", note="战略与产业链分析缺年报叙述章节"))
         else:
             cached = path is not None and Path(path).exists()
             rows.append(SourceRow(
-                kind="年报 PDF", label=url.rsplit("/", 1)[-1] or "年报",
+                kind=ann_kind, label=url.rsplit("/", 1)[-1] or "年报",
                 origin=url, local=str(path) if cached else "", retrieved="",
                 # 未缓存时**不写路径**：写一个不存在的路径，`missing_files`
                 # 会把它报成「清单引用了从未保存的文件」—— 那不对。
                 note="" if cached else "未在本地缓存"))
     if peers:
         rows.append(SourceRow(
-            kind="同业样本", label=f"{len(peers)} 家", origin="东财行业分类",
+            kind="同业样本", label=f"{len(peers)} 家",
+            origin="SEC SIC → Fama-French 49 行业（NYSE / Nasdaq 上市）" if us else "东财行业分类",
             local="", retrieved="",
             note=("样本偏小，行业中位数代表性弱" if len(peers) < 15 else "")))
     return rows

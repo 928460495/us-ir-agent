@@ -179,6 +179,10 @@ class Document:
     # 2 = 其余。**只用于排序**（`Corpus.prompt_docs` 先给第一档），不影响
     # 引用与核验。非公告文档一律 2。
     rank: int = 2
+    # 同为 COMPANY 级，「是谁说的、以什么形式」不同：""=本司公告（默认）/ "transcript"=本司
+    # 电话会纪要（二手转存）/ "peer_filing"=竞争对手的法定披露。分级管可信度，渠道管来源方 ——
+    # 门① 清单按它分节，因子采集据此标「公告 / 纪要 / 同业披露」，不把对手的话说成本司公告。
+    channel: str = ""
 
     def cite(self) -> str:
         return (f"{self.publisher}《{self.title}》"

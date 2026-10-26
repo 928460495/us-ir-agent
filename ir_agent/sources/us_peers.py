@@ -32,6 +32,7 @@ class PeerBook:
     facts: list[Fact]
     ends: dict[str, date]                     # 期间标签 → 期末日
     sids: dict[str, str] = field(default_factory=dict)
+    sic: str = ""                             # SEC 当前登记的 SIC（可比池收窄用；只有当前值）
 
 
 _FILING_COLS = ("accessionNumber", "form", "filingDate", "reportDate", "primaryDocument")
@@ -68,7 +69,8 @@ def _one(ticker: str, name: str, cik: str, store, as_of: date) -> PeerBook | str
         facts += [f for f in xbrl_instance.load_dimensional(cik, sub, fye, store, as_of, [], latest_only=True)
                   if f.key == "shares_outstanding"]
     return PeerBook(ticker=ticker, name=name, cik=cik, fye=fye, facts=facts,
-                    ends=period_ends(doc, fye), sids={"submissions": sub_sid, "companyfacts": cf_sid})
+                    ends=period_ends(doc, fye), sids={"submissions": sub_sid, "companyfacts": cf_sid},
+                    sic=str(sub.get("sic") or ""))
 
 
 def load_peer_books(members, store, as_of: date, notes: list[str]) -> dict[str, PeerBook]:

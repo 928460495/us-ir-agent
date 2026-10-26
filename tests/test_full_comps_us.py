@@ -124,3 +124,32 @@ def test_A股流量TTM仍只认中报年报():
         led.put(Fact(key="operating_profit", value=D(1), unit="元", currency="CNY", period=p,
                      as_of=date(2026, 10, 1), source_id="em", method=Method.REPORTED))
     assert flow_ttm(led, "operating_profit", (2026, 3), AS_OF) is None
+
+
+def test_同业PE与PB由倍数算子算出_不只本司一家(r):
+    full._load_comps("AAPL", r, AS_OF, None)
+    row_led = full._us_comps_ledger(r, "P3", SPOT)
+    assert row_led.get("pe_ttm", SPOT, as_of=AS_OF).value == D(500) / D(12)
+    assert row_led.get("pb", SPOT, as_of=AS_OF).value == D(500) / D(50)
+
+
+def test_可比池先取同一SIC及其上位码_够四家就不扩到全FF49(r):
+    for t, sic in (("P1", "3576"), ("P2", "3577"), ("P3", "3571"), ("P4", "3570"),
+                   ("P5", "3571"), ("P6", "3572"), ("P7", "3571"), ("P8", "3571")):
+        r.peer_books[t].sic = sic
+    r.peer_set.classification = type(r.peer_set.classification)(
+        code="AAPL", name="Apple Inc.", path="3571", used_path="FF49-35 Hardw 计算机", level=1)
+    human, _p, err = full._load_comps("AAPL", r, AS_OF, None)
+    assert err == "" and set(r.comps_codes) == {"P3", "P4", "P5", "P7", "P8"}
+    assert "SIC 3571" in human
+
+
+def test_同一SIC不足四家时退到三位码再退到全行业(r):
+    for t, sic in (("P1", "3576"), ("P2", "3576"), ("P3", "3571"), ("P6", "3576"), ("P7", "3576"),
+                   ("P4", "3672"), ("P5", "3672"), ("P8", "3672"), ("NOCAP", "3571")):
+        r.peer_books[t].sic = sic
+    r.peer_set.classification = type(r.peer_set.classification)(
+        code="AAPL", name="Apple Inc.", path="3571", used_path="FF49-35 Hardw 计算机", level=1)
+    human, _p, _e = full._load_comps("AAPL", r, AS_OF, None)
+    # 同码 + 上位码只有 P3 一家有市值 → 退到 357x：P4 / P5 市值更近但不在 357x，不选
+    assert set(r.comps_codes) == {"P1", "P2", "P3", "P6", "P7"} and "357" in human

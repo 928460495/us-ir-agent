@@ -172,7 +172,7 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     if cs is None:
         notes.append("一致预期不可用（FMP 免费档范围外、或分析时点早于今天而拿不到当时的预期）")
     else:
-        for f in consensus_facts(cs, source_id="fmp_analyst_estimates", money_unit="美元"):
+        for f in consensus_facts(cs, source_id=cs.source_id or "fmp_analyst_estimates", money_unit="美元"):
             r.ledger.put(f)
     md = C.consensus_md(cs) if cs is not None else "一致预期：不可用"
     md += f"\n同业 10-K 入语料库 {len(peer_docs)} 份（COMPANY 级，竞争对手自述）：" + (
@@ -665,7 +665,8 @@ def _load_sections_us(r):
     if not r.annual_url:
         return None, "年报叙述章节（分析时点之前没有 10-K）"
     try:
-        html, _ = edgar.get_text(r.annual_url, {}, "sec_10k", r.store)
+        html, sid = edgar.get_text(r.annual_url, {}, "sec_10k", r.store)
+        r.annual_sid = sid                  # 门① 清单的「本地文件」指向这份快照
         return extract_sections(html, code=r.code), ""
     except Exception as e:                                  # noqa: BLE001
         return None, f"年报叙述章节（{e.__class__.__name__}: {e}）"
@@ -752,11 +753,39 @@ def _load_value_chain(r, as_of: date, client, *, out: Path | None = None,
     from ir_agent.market import is_us
     if is_us(getattr(r, "code", "") or "000000"):
         view.market_scope = "同一 Fama-French 行业的美国上市公司合计"
+    err = ""
     if view.size:
-        r.ledger.put(view.size.to_fact(
-            r.corpus.docs[0].doc_id if r.corpus and r.corpus.docs else "ext",
-            as_of))
-    return view.summary(), view.summary(), ""
+        sid, why = _size_source(view.size, r.corpus, r.store)
+        if sid is not None:
+            r.ledger.put(view.size.to_fact(sid, as_of))
+        else:
+            err = f"产业链：外部行业规模未入账本（{why}）"
+    return view.summary(), view.summary(), err
+
+
+def _size_source(size, corpus, store) -> tuple[str | None, str]:
+    """外部行业规模的出处：它自己的依据所引的那篇文档，落一份快照（正文与网址）供反查。
+
+    此前写死 `corpus.docs[0]` —— 语料库第一篇是谁就算谁（AAPL 实跑：一条 IDC 出货数挂在了
+    FOMC 声明名下）。依据引文在语料库里找不到出处时**不入账**：来源都说不清的数，宁可没有。
+    """
+    from datetime import datetime as _dt
+
+    from ir_agent.basis import BasisKind
+
+    for b in getattr(size, "bases", []) or []:
+        doc = None
+        if b.kind is BasisKind.REPORT and b.quote and corpus is not None:
+            doc = corpus.find(b.quote)
+        elif b.kind is BasisKind.EXTERNAL and corpus is not None:
+            doc = next((d for d in corpus.docs if d.url == b.ref), None)
+        if doc is not None:
+            sid = store.save(source="corpus_doc", payload={
+                "doc_id": doc.doc_id, "title": doc.title, "publisher": doc.publisher,
+                "published": doc.published.isoformat(), "text": doc.text},
+                url=doc.url, fetched_at=_dt.now(), params={"cited_by": "industry.size_external"})
+            return sid, ""
+    return None, "依据引文在语料库里找不到出处文档"
 
 
 def _load_cycle(r, as_of: date) -> tuple[str, str, str]:
@@ -1166,11 +1195,8 @@ def _us_comps_ledger(r, ticker: str, spot: str | None):
     TTM 挂在**本司**最新 TTM 的标签上，`ratios` 的 PE 分母（`latest_visible`）因此与本司同一截止季；
     数值在同业**自己的**标签上算（年初至今长度各家不同，不能重贴后再算）。
     """
-    from ir_agent.ledger import Fact, FactLedger, Method
-    from ir_agent.operators.ttm import latest_visible
-    from ir_agent.relval_data import _Q_OF, flow_ttm
+    from ir_agent.ledger import Fact, FactLedger, LookAheadError, Method
     from ir_agent.sources.us_quotes import peer_market_cap
-    from ir_agent.us_align import align_quarter
 
     as_of = r.as_of
     book, q = r.peer_books[ticker], r.peer_quotes[ticker]
@@ -1185,10 +1211,32 @@ def _us_comps_ledger(r, ticker: str, spot: str | None):
             led.put(Fact(key="market_cap", value=cap, unit="美元", currency="USD", period=spot,
                          as_of=q.as_of, source_id=q.source_id, method=Method.COMPUTED,
                          derived_from=(f"last_price@{spot}", "shares_outstanding")))
+    try:
+        _peer_ttm_into(led, r, book, as_of)
+    finally:
+        # PE / PB 挂在即期期间上，由倍数算子算（A 股同业跑完整 pipeline 时也是它）——
+        # 只放市值与利润而不跑它，可比表的 PE / PB 就只剩本司一家（AAPL 实跑 1/7）
+        if spot is not None:
+            from ir_agent.operators import multiples
+            try:
+                multiples.compute(led, r.period, as_of, spot_period=spot)
+            except (KeyError, LookAheadError):
+                pass
+    return led
+
+
+def _peer_ttm_into(led, r, book, as_of: date) -> None:
+    """同业 TTM 利润：在同业自己的标签上算、按期末日期对齐本司截止季，贴在本司 TTM 标签上。"""
+    from ir_agent.ledger import Fact, FactLedger, Method
+    from ir_agent.operators.ttm import latest_visible
+    from ir_agent.relval_data import _Q_OF, flow_ttm
+    from ir_agent.us_align import align_quarter
+
+    ticker = book.ticker
     mine = latest_visible(r.ledger, "net_profit_ttm", as_of)
     t_end = (getattr(r, "target_ends", None) or {}).get(mine.period) if mine else None
     if t_end is None:
-        return led
+        return
     own = FactLedger()
     for f in book.facts:
         own.put(f)
@@ -1196,7 +1244,7 @@ def _us_comps_ledger(r, ticker: str, spot: str | None):
                if f.key == "net_profit_attr_parent" and f.as_of <= as_of}
     hit = align_quarter(book.ends, t_end, visible)
     if hit is None:
-        return led
+        return
     label = hit[0]
     v = flow_ttm(own, "net_profit_attr_parent", (int(label[:4]), _Q_OF[label[4:]]), as_of)
     if v is not None:
@@ -1206,7 +1254,28 @@ def _us_comps_ledger(r, ticker: str, spot: str | None):
                      as_of=filed, source_id=book.sids.get("companyfacts", "edgar"),
                      method=Method.COMPUTED,
                      derived_from=(f"net_profit_attr_parent@{label}#{ticker}",)))
-    return led
+
+
+COMPS_MIN_POOL = 4          # 收窄后的可比池至少这么多家有市值，否则再放宽一级
+
+
+def _comps_pool(sized: list, books: dict, target_sic: str) -> tuple[list, str]:
+    """可比池按 SIC 由窄到宽：同码及其上位码（3571 与 3570）→ 同三位码（357x）→ 全 FF49 行业。
+
+    FF49 是回归样本的口径（要几十家），但拿来挑六家可比太宽：AAPL 实跑 FF49-35 里按市值就近
+    选出的是思科、Palo Alto、闪迪 —— 网络设备、安全软件、存储，三个定性模块的审核者都指出
+    「混合样本」让同业分位失去参照。SIC 只有当前值（设计「六」已知限制）。
+    """
+    sic = target_sic if len(target_sic) == 4 and target_sic.isdigit() else ""
+    levels = []
+    if sic:
+        levels.append(({sic, sic[:3] + "0"}, f"可比池：SIC {sic}" + (f" 与上位码 {sic[:3]}0" if sic[3] != "0" else "")))
+        levels.append(({f"{sic[:3]}{d}" for d in "0123456789"}, f"可比池：SIC {sic[:3]}x（同三位码）"))
+    for codes, note in levels:
+        pool = [s for s in sized if getattr(books.get(s.code), "sic", "") in codes]
+        if len(pool) >= COMPS_MIN_POOL:
+            return pool, f"{note}，{len(pool)} 家有市值"
+    return list(sized), "可比池：全 FF49 行业（同 SIC 有市值的同业不足四家）"
 
 
 def _load_comps_us(code: str, r, as_of: date) -> tuple[str, str, str]:
@@ -1241,9 +1310,10 @@ def _load_comps_us(code: str, r, as_of: date) -> tuple[str, str, str]:
             dropped.append((t, why))
             continue
         sized.append(Sized(t, b.name, cap))
+    pool, pool_note = _comps_pool(sized, books, r.peer_set.classification.path)
     if mc is not None:
-        sized.append(Sized(code, r.peer_set.target_name, mc.value))
-    chosen, me = nearest(sized, code)
+        pool.append(Sized(code, r.peer_set.target_name, mc.value))
+    chosen, me = nearest(pool, code)
     if not chosen:
         return "", "", "可比（同业市值全部取不到）"
     sel = Selection(target=code, chosen=chosen, universe=len(r.peer_set.members), dropped=dropped,
@@ -1263,7 +1333,7 @@ def _load_comps_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     except (InsufficientPeers, ValueError) as e:
         return sel.summary(), "", f"可比分析（{e}）"
     comps_facts(table, r.ledger)
-    return (f"{sel.summary()}\n{table.summary()}",
+    return (f"{pool_note}\n{sel.summary()}\n{table.summary()}",
             f"{sel.for_prompt()}\n" + table.for_prompt(ledger=r.ledger, as_of=as_of, spot=spot), "")
 
 
@@ -2590,11 +2660,13 @@ def run_analyse(code: str, r, as_of: date, out_dir: str | Path, *,
     # 门① 的同业样本名单就永远是空的，而 spec 要的正是让人看见「牧原 11 家
     # vs 生益 46 家」这个代表性差异。用 `_build_evidence` 已经在用的那条路。
     annual_url = getattr(r, "annual_url", "") or ""
+    annual_local = (r.store.path_for(r.annual_sid) if getattr(r, "annual_sid", None)
+                    else _annual_cache_dir() / annual_url.rsplit("/", 1)[-1]) if annual_url else None
     rows = collect_rows(
         r.ledger, corpus=getattr(r, "corpus", None), pdf_dir=out / "pdf",
         peers=_peer_names(code),
-        annual=(annual_url, (_annual_cache_dir() / annual_url.rsplit("/", 1)[-1])
-                if annual_url else None))
+        annual=(annual_url, annual_local),
+        store=getattr(r, "store", None), code=code)
     (out / SOURCES_MD).write_text(render(rows, _snapshot_gaps(r))
                                   + _qual_section(statuses), encoding="utf-8")
     (out / SOURCES_JSON).write_text(

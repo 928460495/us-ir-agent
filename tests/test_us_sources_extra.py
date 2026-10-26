@@ -43,6 +43,7 @@ def test_可比同业的10K章节进语料库_COMPANY级且标明同业(r, monke
     assert notes == [] and len(docs) == 1
     d = docs[0]
     assert d.tier is Tier.COMPANY and "同业" in d.publisher and "CISCO" in d.publisher
+    assert d.channel == "peer_filing"
     assert d.published == date(2025, 9, 5) and d.retrieved == AS_OF
     assert "csco-20250726.htm" in d.url and seen == [d.url]
     assert d.text and d.prompt_limit == peer_filings.PROMPT_LIMIT

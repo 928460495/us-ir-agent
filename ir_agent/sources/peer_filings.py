@@ -50,5 +50,6 @@ def peer_10k_docs(r, as_of: date) -> tuple[list[Document], list[str]]:
             doc_id=f"peer10k_{t}_{tk.accession}", url=tk.url,
             title=f"{b.name} 10-K（财年截至 {tk.report_date.isoformat()}）：业务、竞争与管理层讨论",
             publisher=f"{b.name}（同业 10-K，竞争对手自述）", tier=Tier.COMPANY,
-            published=tk.filed, retrieved=as_of, text="\n\n".join(parts), prompt_limit=PROMPT_LIMIT))
+            published=tk.filed, retrieved=as_of, text="\n\n".join(parts), prompt_limit=PROMPT_LIMIT,
+            channel="peer_filing"))
     return docs, notes

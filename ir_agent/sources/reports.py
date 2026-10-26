@@ -258,6 +258,8 @@ class Consensus:
     # 统计量与来源。A 股是研报中位数（provider 空 = 东财研报）；美股 FMP 给的是均值
     stat: str = "中位"
     provider: str = ""
+    # 原始接口快照编号（美股 FMP）。事实挂它才能从账本反查当时的响应；空 = 无快照（A 股研报）
+    source_id: str = ""
 
     def has_data(self) -> bool:
         return bool(self.eps)

@@ -64,5 +64,5 @@ def fetch_transcripts(ticker: str, as_of: date, store, n: int = 2) -> tuple[list
             doc_id=f"defeatbeta_{symbol}_{fy}Q{fq}", url=f"{URL}#{sid}", publisher=PUBLISHER,
             tier=Tier.COMPANY, title=f"FY{fy} Q{fq} 业绩电话会纪要",
             published=date.fromisoformat(str(r["report_date"])[:10]), retrieved=as_of,
-            text=_text(r.get("transcripts")), prompt_limit=PROMPT_LIMIT))
+            text=_text(r.get("transcripts")), prompt_limit=PROMPT_LIMIT, channel="transcript"))
     return docs, ""
