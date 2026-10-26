@@ -147,6 +147,14 @@ class CatalogEntry:
     raw: str = ""
 
 
+def catalog_label(key: str) -> str:
+    """事实目录里的中文名：登记表优先，美股分部键按轴与成员生成，其余原样。"""
+    if key in LABELS:
+        return LABELS[key]
+    from ir_agent.sources.xbrl_instance import label as seg_label
+    return seg_label(key) or key
+
+
 @dataclass
 class FactCatalog:
     entries: list[CatalogEntry] = field(default_factory=list)
@@ -177,7 +185,7 @@ class FactCatalog:
                 # 给分析师的是**简写** —— 来源由账本解析。
                 # 三段式的 source_id 含时间戳，既冗长又跨运行失效。
                 key=key, period=per, token=f"[[{canonical}@{per}]]",
-                label=LABELS.get(key, key),
+                label=catalog_label(key),
                 display=format_value(f), unit=f.unit, raw=f"{f.value:f}"))
         return cls(entries=entries, ledger=ledger, as_of=as_of)
 

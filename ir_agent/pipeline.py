@@ -525,6 +525,19 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
                         + (f"：{shown}" if recent else ""))
     warnings += fmp_notes
 
+    # 2.5) 维度事实：分部收入与按类别的在外股数（companyfacts 不收，见 xbrl_instance）。
+    #      取不到只记说明 —— 三表主数不依赖它。
+    from ir_agent.sources import xbrl_instance
+    dim_notes: list[str] = []
+    sub_doc = store.load(sec_sids["submissions"]).payload
+    dim = xbrl_instance.load_dimensional(str(sub_doc.get("cik") or "0"), sub_doc, fye, store,
+                                         as_of, dim_notes)
+    for f in dim:
+        led.put(f)
+    if not any(f.key.startswith("seg_rev.") for f in dim):
+        warnings.append("分部收入：XBRL 实例里没有按产品 / 经营分部 / 地区拆分的营收")
+    warnings += [f"分部收入：{n}" for n in dim_notes]
+
     # 3) 行情。FMP 为主、Tiingo 兜底；市值 = 收盘价 × EDGAR 在外股数。
     shares, shares_why = _latest_shares(led, as_of)
     quote_notes: list[str] = []

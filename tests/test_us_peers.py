@@ -113,7 +113,7 @@ def test_一家只报IFRS一家HTTP失败_其余照常且逐家留说明(tmp_pat
     assert any(n.startswith("BAD 丙") and "HTTPError" in n for n in notes)
 
 
-def test_快照里没有邮箱且申报清单被裁掉(tmp_path, monkeypatch):
+def test_快照里没有邮箱且申报清单只留定位列(tmp_path, monkeypatch):
     store, calls, notes = SnapshotStore(tmp_path), [], []
     monkeypatch.setattr(edgar, "load_tickers", lambda st: (
         {"AAA": edgar.TickerInfo("0000000001", "甲", "Nasdaq")}, "sid"))
@@ -121,5 +121,33 @@ def test_快照里没有邮箱且申报清单被裁掉(tmp_path, monkeypatch):
     us_peers.load_peer_books([Member("AAA", "甲")], store, AS_OF, notes)
     texts = [p.read_text(encoding="utf-8") for p in tmp_path.rglob("*.json")]
     assert texts and not any("tester@example.com" in t for t in texts)
-    subs = [json.loads(t) for t in texts if '"source": "sec_submissions"' in t]
-    assert subs and all("filings" not in s["payload"] for s in subs)
+    subs = [json.loads(t) for t in texts if '"source": "sec_submissions_slim"' in t]
+    assert subs and all(set(s["payload"]["filings"]["recent"]) ==
+                        {"accessionNumber", "form", "filingDate", "reportDate", "primaryDocument"}
+                        for s in subs)
+
+
+def test_多类股同业从最新申报实例补在外股数(tmp_path, monkeypatch):
+    from datetime import date as d_
+    from decimal import Decimal as D_
+    from ir_agent.ledger import Fact, Method
+    from ir_agent.sources import xbrl_instance
+    store, calls, notes = SnapshotStore(tmp_path), [], []
+    doc = _load("companyfacts_0000320193.json")
+    doc["facts"]["dei"] = {}                               # 没有不带维度的封面股数
+    monkeypatch.setattr(edgar, "load_tickers", lambda st: (
+        {"GOOGL": edgar.TickerInfo("0000000001", "Alphabet", "Nasdaq")}, "sid"))
+    _fake_sec(monkeypatch, {"submissions": SUB, "companyfacts": doc}, calls)
+    seen = {}
+
+    def dim(cik, sub, fye, st, as_of, nts, latest_only=False):
+        seen["latest_only"] = latest_only
+        return [Fact(key="shares_outstanding", value=D_(12), unit="股", period="2026-07-20",
+                     as_of=d_(2026, 7, 24), source_id="inst", method=Method.COMPUTED),
+                Fact(key="seg_rev.product.X", value=D_(1), unit="美元", currency="USD",
+                     period="2025FY", as_of=d_(2026, 7, 24), source_id="inst", method=Method.REPORTED)]
+    monkeypatch.setattr(xbrl_instance, "load_dimensional", dim)
+    b = us_peers.load_peer_books([Member("GOOGL", "Alphabet")], store, AS_OF, notes)["GOOGL"]
+    assert seen["latest_only"] is True
+    assert [f.value for f in b.facts if f.key == "shares_outstanding"] == [D_(12)]
+    assert not any(f.key.startswith("seg_rev") for f in b.facts)

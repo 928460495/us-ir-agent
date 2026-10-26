@@ -99,8 +99,13 @@ def _cache_index_put(store, source: str, url: str, fetched: datetime, sid: str) 
     p.write_text(json.dumps({"fetched": fetched.isoformat(), "source_id": sid}), encoding="utf-8")
 
 
+def fetch_text_cached(url: str, source: str, store, as_of: date) -> tuple[str, str]:
+    """`fetch_json_cached` 的文本版（XBRL 实例 XML），同一条复用规则。"""
+    return fetch_json_cached(url, source, store, as_of, as_text=True)
+
+
 def fetch_json_cached(url: str, source: str, store, as_of: date, *, transform=None,
-                      params: dict | None = None) -> tuple[dict, str]:
+                      params: dict | None = None, as_text: bool = False):
     """同业取数用：**抓取日不早于分析时点**的快照直接复用，否则重抓。
 
     时点守卫只认申报日 `filed`：as_of 当天或之后抓的 companyfacts 含有 as_of 前申报的全部事实，
@@ -118,7 +123,7 @@ def fetch_json_cached(url: str, source: str, store, as_of: date, *, transform=No
         _throttle()
         r = requests.get(url, headers=headers, timeout=TIMEOUT)
         r.raise_for_status()
-        return r.json()
+        return r.text if as_text else r.json()
 
     payload = with_retry(once)
     if transform is not None:
