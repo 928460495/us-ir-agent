@@ -1112,6 +1112,36 @@ def _latest_annual_period(ledger, as_of: date) -> str | None:
     return periods[-1] if periods else None
 
 
+def _gdp_yoy_by_fy_us(r, periods: list[str], as_of: date) -> dict[str, Decimal]:
+    """美股：本司财年对应的名义 GDP 同比。行业营收按本司财年（苹果 10 月—9 月）对齐，GDP 是
+    日历季度 —— 取期末落在该财年内的四个季度水平值之和，与上一财年同法相比。季度不全不给。"""
+    import calendar
+    import re as _re
+    from datetime import timedelta
+
+    q_end: dict[date, Decimal] = {}
+    for (k, per), bucket in r.ledger._facts.items():          # noqa: SLF001
+        m = _re.match(r"^(\d{4})Q([1-4])S$", per) if k == "macro.gdp_nominal" else None
+        seen = [f for f in bucket if f.as_of <= as_of] if m else []
+        if seen:
+            y, q = int(m.group(1)), int(m.group(2))
+            q_end[date(y, q * 3, calendar.monthrange(y, q * 3)[1])] = max(seen, key=lambda f: f.as_of).value
+
+    def fy_sum(end: date) -> Decimal | None:
+        qs = [v for d, v in q_end.items() if end - timedelta(days=365 - 45) < d <= end + timedelta(days=45)]
+        return sum(qs, Decimal(0)) if len(qs) == 4 else None
+
+    out: dict[str, Decimal] = {}
+    for per in periods:
+        end = r.target_ends.get(per)
+        if end is None:
+            continue
+        now, then = fy_sum(end), fy_sum(end - timedelta(days=364))
+        if now is not None and then:
+            out[per] = now / then - 1
+    return out
+
+
 def _industry_profile(peers, agg, cache, r, as_of: date) -> tuple[str, str]:
     """由已缓存的同业事实组装行业画像。"""
     from ir_agent import industry_profile as ip
@@ -1150,7 +1180,12 @@ def _industry_profile(peers, agg, cache, r, as_of: date) -> tuple[str, str]:
         if history[a]:
             ind_yoy[b] = history[b] / history[a] - 1
     gdp_yoy: dict[str, Decimal] = {}
+    if getattr(r, "target_ends", None):
+        # 美股：GDP 挂在季度上，按本司财年对齐（见 _gdp_yoy_by_fy_us）
+        gdp_yoy = _gdp_yoy_by_fy_us(r, list(ind_yoy), as_of)
     for per in ind_yoy:
+        if per in gdp_yoy:
+            continue
         v = _fact_value(r.ledger, "macro.gdp_nominal_yoy", per, as_of)
         if v is not None:
             gdp_yoy[per] = v

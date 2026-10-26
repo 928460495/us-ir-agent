@@ -16,6 +16,7 @@ A 股专有指标（PMI、M1/M2）美股路径不产出，周期打分按缺失�
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -220,6 +221,32 @@ def fetch_industry_stats(ff49: int, as_of: date, store) -> tuple[list[Fact], lis
     return facts, notes
 
 
+CAGR_YEARS = 5
+_QLABEL = re.compile(r"^(\d{4})Q([1-4])S$")
+
+
+def nominal_gdp_cagr(facts: list[Fact]) -> list[Fact]:
+    """名义 GDP 的五年复合增速（与 A 股 `macro._nominal_cagr` 同一用途：生命周期与永续增长率的
+    参照系）。**同季对同季**：季调年化水平值也带残余季节性，跨季比不干净。每个季度各出一条，
+    时点取两端较晚的公布日 —— 账本按 as_of 自然取到当时可见的最新一条。"""
+    lv = {}
+    for f in facts:
+        m = _QLABEL.match(f.period) if f.key == "macro.gdp_nominal" else None
+        if m:
+            lv[(int(m.group(1)), int(m.group(2)))] = f
+    out = []
+    for (y, q), end in sorted(lv.items()):
+        start = lv.get((y - CAGR_YEARS, q))
+        if start is None or start.value <= 0:
+            continue
+        out.append(Fact(key="macro.gdp_nominal_cagr",
+                        value=(end.value / start.value) ** (Decimal(1) / CAGR_YEARS) - 1,
+                        unit="ratio", period=end.period, as_of=max(start.as_of, end.as_of),
+                        source_id=end.source_id, method=Method.COMPUTED,
+                        derived_from=(f"macro.gdp_nominal@{start.period}", f"macro.gdp_nominal@{end.period}")))
+    return out
+
+
 def fetch_us_macro(as_of: date, store) -> tuple[list[Fact], list[str]]:
     """登记表全部序列。单个序列失败只记说明 —— 宏观是背景，不是主线。缺 key 整体不可用。"""
     _key()
@@ -229,7 +256,7 @@ def fetch_us_macro(as_of: date, store) -> tuple[list[Fact], list[str]]:
             facts += fetch_series_asof(sid, as_of, store)
         except MacroUnavailable as e:
             notes.append(str(e))
-    return facts, notes
+    return facts + nominal_gdp_cagr(facts), notes
 
 
 class UsMacroSnapshot(MacroSnapshot):
