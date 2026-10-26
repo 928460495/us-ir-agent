@@ -152,7 +152,10 @@ def catalog_label(key: str) -> str:
     if key in LABELS:
         return LABELS[key]
     from ir_agent.sources.xbrl_instance import label as seg_label
-    return seg_label(key) or key
+    if (lab := seg_label(key)):
+        return lab
+    from ir_agent.sources import fred
+    return fred.IND_LABELS.get(key) or dict(fred.UsMacroSnapshot._SHOWN).get(key) or key
 
 
 @dataclass

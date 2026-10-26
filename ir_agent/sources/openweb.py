@@ -252,6 +252,17 @@ PROMPT = """为一份 A 股研究报告采集公司与行业的外部资料。
 """
 
 
+# 美股版：来源优先级换成美国官方统计；一手研究机构（Gartner、IDC 等）原站常拒绝程序访问
+# （2026-10-26 AAPL 实测 403），同一份新闻稿通常也发在通讯社与公司新闻室 —— 那是正规转载，
+# 不是绕过拦截。其余格式与硬性要求与 A 股版逐字一致（解析器只认这一种行格式）。
+PROMPT_US = PROMPT.replace("为一份 A 股研究报告", "为一份美股研究报告").replace(
+    "- 优先统计局、部委、行业协会、一手市场研究机构的原始页面，其次财经媒体。",
+    "- 优先美国政府统计（Census、BEA、BLS、EIA 等）、监管机构、行业协会、一手市场研究机构的\n"
+    "  原始页面，其次财经媒体。\n"
+    "- 一手机构的新闻稿若原站拒绝访问，改给同一份新闻稿在 Business Wire、PR Newswire、\n"
+    "  GlobeNewswire 或该机构 / 公司新闻室的转载页；发布机构仍写原机构。")
+
+
 # ── 抓取与正文提取 ──────────────────────────────────────────────
 
 TIMEOUT = 20
@@ -996,8 +1007,10 @@ def gather(client, *, code: str, company: str, industry: str,
     例如 `make_client(tools=["WebSearch", "WebFetch"])`。不开不会报错，
     只会安静地什么都搜不到 —— 与 web.search 同一条前提。
     """
+    from ir_agent.market import is_us
+
     res = OpenWebResult()
-    raw = client(PROMPT.format(company=company or code, code=code,
+    raw = client((PROMPT_US if is_us(code) else PROMPT).format(company=company or code, code=code,
                                industry=industry or "未知",
                                per_slot=PER_SLOT, as_of=as_of.isoformat()))
     seen = {d.url for d in corpus.docs}

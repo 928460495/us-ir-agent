@@ -59,6 +59,10 @@ US_MACRO: tuple[UsSeries, ...] = (
     UsSeries("macro.initial_claims", "ICSA", "level", "D", LEADING, "人"),
     UsSeries("macro.building_permits", "PERMIT", "level", "M", LEADING, "千套"),
     UsSeries("macro.consumer_sentiment", "UMCSENT", "level", "M", LEADING, "index"),
+    # ISM PMI 付费、不用；地区联储的制造业调查免费且同为扩散指数（零为荣枯线），作先行指标替代。
+    # OECD 美国综合领先指标在 FRED 上停更于 2024-01（2026-10-26 实测），不收。
+    UsSeries("macro.philly_fed_mfg", "GACDFSA066MSFRBPHI", "level", "M", LEADING, "index"),
+    UsSeries("macro.empire_state_mfg", "GACDISA066MSFRBNY", "level", "M", LEADING, "index"),
     # 美元汇率：境外收入占比高的公司（苹果过半）折算与定价都受它影响。ICE 的 DXY 是专有
     # 指数，FRED 上取美联储编制的广义美元指数（月均，可算同比）。不属于三分法，单列「汇率」组
     UsSeries("macro.usd_index", "TWEXBGSMTH", "level", "M", FX, "index"),
@@ -69,6 +73,43 @@ US_MACRO: tuple[UsSeries, ...] = (
     UsSeries("rate.ust_2y", "DGS2", "pct", "D", None),
 )
 US_INDICATOR_CLASS = {s.key: s.cls for s in US_MACRO if s.cls}
+
+# FF49 行业 → 官方统计（人口普查局的制造业出货、美联储的分行业工业产出、零售销售）。
+# 美股免费渠道没有卖方研报的行业测算；这些是政府口径的行业数，按当时版本入账，
+# 键以 `macro.ind_` 开头 —— 与宏观同样挂在自己的月度期间上，进事实目录的规则不必另写。
+# 只登记了阶段 4 试跑涉及的四个行业；其他行业返回空，如实说「无行业官方统计」。
+_IND = {
+    "computer_shipments": UsSeries("macro.ind_computer_shipments_yoy", "A34SVS", "yoy", "M", None),
+    "computer_production": UsSeries("macro.ind_computer_production_yoy", "IPG334S", "yoy", "M", None),
+    "semiconductor_production": UsSeries("macro.ind_semiconductor_production_yoy", "IPG3344S", "yoy", "M", None),
+    "machinery_shipments": UsSeries("macro.ind_machinery_shipments_yoy", "A33SVS", "yoy", "M", None),
+    "machinery_production": UsSeries("macro.ind_machinery_production_yoy", "IPG333S", "yoy", "M", None),
+    "retail_sales": UsSeries("macro.ind_retail_sales_yoy", "RSXFS", "yoy", "M", None),
+    "general_merchandise_sales": UsSeries("macro.ind_general_merchandise_sales_yoy", "RSGMS", "yoy", "M", None),
+}
+US_INDUSTRY: dict[int, tuple[UsSeries, ...]] = {
+    35: (_IND["computer_shipments"], _IND["computer_production"]),
+    37: (_IND["semiconductor_production"], _IND["computer_shipments"]),
+    21: (_IND["machinery_shipments"], _IND["machinery_production"]),
+    43: (_IND["retail_sales"], _IND["general_merchandise_sales"]),
+}
+IND_LABELS = {
+    "macro.ind_computer_shipments_yoy": "计算机与电子产品制造商出货额同比（人口普查局）",
+    "macro.ind_computer_production_yoy": "计算机与电子产品工业产出同比（美联储）",
+    "macro.ind_semiconductor_production_yoy": "半导体及电子元件工业产出同比（美联储）",
+    "macro.ind_machinery_shipments_yoy": "机械制造商出货额同比（人口普查局）",
+    "macro.ind_machinery_production_yoy": "机械工业产出同比（美联储）",
+    "macro.ind_retail_sales_yoy": "零售销售同比（人口普查局）",
+    "macro.ind_general_merchandise_sales_yoy": "综合商品零售销售同比（人口普查局）",
+}
+
+
+def industry_series(ff49: int) -> tuple[UsSeries, ...]:
+    return US_INDUSTRY.get(ff49, ())
+
+
+def _all_specs() -> tuple[UsSeries, ...]:
+    return US_MACRO + tuple(dict.fromkeys(s for v in US_INDUSTRY.values() for s in v))
 
 
 def classify(key: str) -> str | None:
@@ -117,9 +158,9 @@ def _observations(series_id: str, as_of: date, store) -> tuple[list[dict], str]:
 
 def fetch_series_asof(series_id: str, as_of: date, store) -> list[Fact]:
     """一个 FRED 序列在 as_of 当时的版本 → 登记表里用到它的所有账本键。"""
-    specs = [s for s in US_MACRO if s.series_id == series_id]
+    specs = [s for s in _all_specs() if s.series_id == series_id]
     if not specs:
-        raise ValueError(f"{series_id} 不在美国宏观登记表里")
+        raise ValueError(f"{series_id} 不在美国宏观与行业登记表里")
     obs, sid = _observations(series_id, as_of, store)
     points: dict[date, tuple[Decimal, date]] = {}
     current = _realtime_end(as_of)
@@ -168,6 +209,17 @@ def history(series_id: str, start: date, end: date, store) -> list[tuple[date, D
             if o.get("value") not in (None, "", ".")]
 
 
+def fetch_industry_stats(ff49: int, as_of: date, store) -> tuple[list[Fact], list[str]]:
+    """本司 FF49 行业的官方统计（当时版本）。单个序列失败只记说明。"""
+    facts, notes = [], []
+    for sid in dict.fromkeys(s.series_id for s in industry_series(ff49)):
+        try:
+            facts += [f for f in fetch_series_asof(sid, as_of, store) if f.key.startswith("macro.ind_")]
+        except MacroUnavailable as e:
+            notes.append(str(e))
+    return facts, notes
+
+
 def fetch_us_macro(as_of: date, store) -> tuple[list[Fact], list[str]]:
     """登记表全部序列。单个序列失败只记说明 —— 宏观是背景，不是主线。缺 key 整体不可用。"""
     _key()
@@ -189,6 +241,8 @@ class UsMacroSnapshot(MacroSnapshot):
               ("macro.initial_claims", "首次申领失业金人数"),
               ("macro.building_permits", "新屋开工许可"),
               ("macro.consumer_sentiment", "密歇根消费者信心"),
+              ("macro.philly_fed_mfg", "费城联储制造业景气（扩散指数）"),
+              ("macro.empire_state_mfg", "纽约联储制造业景气（扩散指数）"),
               ("macro.gdp_real_yoy", "实际 GDP 同比"),
               ("macro.gdp_nominal_yoy", "名义 GDP 同比"),
               ("macro.industrial_production_yoy", "工业产出同比"),

@@ -71,6 +71,10 @@ def r(tmp_path, monkeypatch):
     q = lambda p: Quote(price=D(p), as_of=date(2026, 10, 23), source="tiingo_iex", source_id="iex")  # noqa: E731
     monkeypatch.setattr(us_quotes, "fetch_peer_quotes",
                         lambda ts, st: ({"DELL": q("120"), "HPQ": q("30"), "SMCI": q("40")}, []))
+    from ir_agent.sources import fred
+    stat = Fact(key="macro.ind_computer_shipments_yoy", value=D("0.031"), unit="ratio", period="2026-08",
+                as_of=date(2026, 10, 2), source_id="fred_a34svs", method=Method.REPORTED)
+    monkeypatch.setattr(fred, "fetch_industry_stats", lambda num, as_of, st: ([stat], []))
     return SimpleNamespace(ledger=led, store=store, period="2025FY", as_of=AS_OF,
                            sec_meta={"companyfacts_sid": sid, "fye": "0927"})
 
@@ -85,6 +89,10 @@ def test_美股行业聚合写入账本且同业数据交给后续步骤(r):
     assert r.peer_set.target == "AAPL"
     assert any("IFRS" in n for n in r.peer_notes)
     assert "FF49-35" in human and "[[industry." in model
+    # 行业官方统计：当时版本入账，摘要给中文名与数值，提示词只给占位符
+    assert r.ledger.get("macro.ind_computer_shipments_yoy", "2026-08", as_of=AS_OF).value == D("0.031")
+    assert "计算机与电子产品制造商出货额同比" in human and "3.10%" in human
+    assert "[[macro.ind_computer_shipments_yoy@2026-08]]" in model
 
 
 def test_同业按期末最近的财年计入本司FY2025营收(r):

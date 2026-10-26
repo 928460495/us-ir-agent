@@ -155,20 +155,28 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     from ir_agent.sources.external import Corpus
     from ir_agent.sources.reports import consensus_facts
 
+    from ir_agent.sources import peer_filings
+
     r.corpus = Corpus(as_of=as_of)
     statements, fomc_err = fomc.fetch_statements(as_of, r.store)
     for d in statements:
         r.corpus.add_if_visible(d)
+    # 可比同业的 10-K（COMPANY 级，竞争对手自述）：卖方研报的替代 —— 「可比」一步已定名单
+    peer_docs, peer_notes = peer_filings.peer_10k_docs(r, as_of)
+    for d in peer_docs:
+        r.corpus.add_if_visible(d)
     fye = r.store.load(r.sec_meta["submissions_sid"]).payload.get("fiscalYearEnd") or ""
     cs = fmp.fetch_consensus(code, fye, as_of, r.store) if len(fye) == 4 else None
     r.consensus = cs
-    notes: list[str] = [fomc_err] if fomc_err else []
+    notes: list[str] = ([fomc_err] if fomc_err else []) + peer_notes
     if cs is None:
         notes.append("一致预期不可用（FMP 免费档范围外、或分析时点早于今天而拿不到当时的预期）")
     else:
         for f in consensus_facts(cs, source_id="fmp_analyst_estimates", money_unit="美元"):
             r.ledger.put(f)
     md = C.consensus_md(cs) if cs is not None else "一致预期：不可用"
+    md += f"\n同业 10-K 入语料库 {len(peer_docs)} 份（COMPANY 级，竞争对手自述）：" + (
+        "、".join(d.publisher.split("（")[0] for d in peer_docs) or "无")
     prompt = C.consensus_prompt(cs) if cs is not None else ""
     return md, prompt, ("外部资料（" + "；".join(notes) + "）") if notes else ""
 
@@ -923,12 +931,44 @@ def _load_industry_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     except Exception as e:                                  # noqa: BLE001
         prof_md = f"（行业画像未生成：{e.__class__.__name__}）"
 
+    stat_md, stat_pr = _industry_stats_us(peers, r, as_of, errs)
     dropped = len(peers.members) - len(books)
     head = (f"{peers.summary()}\n  同业财报：{len(books)} 家取到，{dropped} 家剔除；"
             "年度数按期末最近的财年对齐到本司财年"
             + "".join(f"\n    – {n}" for n in r.peer_notes))
-    return (f"{head}\n{agg.summary()}\n{prof_md}",
-            f"{agg.for_prompt()}\n{prof_pr}".rstrip(), "；".join(errs))
+    return (f"{head}\n{agg.summary()}\n{prof_md}\n{stat_md}".rstrip(),
+            f"{agg.for_prompt()}\n{prof_pr}\n{stat_pr}".rstrip(), "；".join(errs))
+
+
+def _industry_stats_us(peers, r, as_of: date, errs: list[str]) -> tuple[str, str]:
+    """本司 FF49 行业的官方统计（人口普查局出货、美联储分行业产出、零售销售），当时版本入账。"""
+    import re as _re
+
+    from ir_agent.sources import fred
+    from ir_agent.sources.macro import MacroUnavailable
+
+    m = _re.match(r"FF49-(\d+)", peers.classification.used_path)
+    specs = fred.industry_series(int(m.group(1))) if m else ()
+    if not specs:
+        return "行业官方统计：本行业未登记（只登记了试跑涉及的四个 FF49 行业）", ""
+    try:
+        facts, notes = fred.fetch_industry_stats(int(m.group(1)), as_of, r.store)
+    except MacroUnavailable as e:
+        errs.append(f"行业官方统计（{e}）")
+        return "", ""
+    errs += [f"行业官方统计（{n}）" for n in notes]
+    for f in facts:
+        r.ledger.put(f)
+    human, prompt = ["行业官方统计（当时公布的版本）"], []
+    for s_ in specs:
+        seen = [f for f in facts if f.key == s_.key and f.as_of <= as_of]
+        if not seen:
+            continue
+        f = max(seen, key=lambda f: f.period)
+        label = fred.IND_LABELS.get(s_.key, s_.key)
+        human.append(f"  {label}（{f.period}）{f.value * 100:.2f}%")
+        prompt.append(f"  {label}　[[{s_.key}@{f.period}]]")
+    return "\n".join(human), "\n".join(prompt)
 
 
 def _load_industry(code: str, r, as_of: date) -> tuple[str, str, str]:
