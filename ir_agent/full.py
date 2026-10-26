@@ -1994,8 +1994,8 @@ def _collect_factors(r, as_of: date, client, md: dict, decomps,
         factor_data = gaps.collect(
             client, decomps, r.ledger, r.corpus or Corpus(as_of=as_of),
             industry, as_of, sections=getattr(r, "sections", None),
-            annual_url=getattr(r, "annual_url", ""))
-        md["因子数据"] = gaps.summary(factor_data)
+            annual_url=getattr(r, "annual_url", ""), us=_is_us_run(r))
+        md["因子数据"] = gaps.summary(factor_data, us=_is_us_run(r))
     except Exception as e:                                  # noqa: BLE001
         skipped.append(f"因子数据采集（{e.__class__.__name__}: {e}）")
     finally:
@@ -2011,7 +2011,12 @@ def _collect_factors(r, as_of: date, client, md: dict, decomps,
     return factor_data
 
 
-def _factor_ctx(factor_data: dict | None) -> str:
+def _is_us_run(r) -> bool:
+    from ir_agent.market import is_us
+    return is_us(getattr(r, "code", "") or "000000")
+
+
+def _factor_ctx(factor_data: dict | None, us: bool = False) -> str:
     """把因子采集结果渲染进辩论②的提示词。
 
     **采集失败时必须显式说出来**，不能给一个空段落 —— 见
@@ -2021,7 +2026,7 @@ def _factor_ctx(factor_data: dict | None) -> str:
         return ("（本轮因子数据采集未成功；以下取值只能基于上面的定量事实"
                 "与语料库，双方都应据此降低置信度）")
     from ir_agent import gaps
-    return gaps.summary(factor_data)
+    return gaps.summary(factor_data, us=us)
 
 
 def _stop_for_manual(code: str, r, as_of: date, out: Path, arts: dict,
@@ -2994,7 +2999,7 @@ def run_brief(code: str, r, as_of: date, out_dir: str | Path,
     subjects = ([f.label for f in meth.factors()]
                 if meth is not None else list(assume.DRIVERS))
     sb = _stance_round(client, out, STANCE_B, "B", subjects,
-                       ctx + "\n\n【因子采集】\n" + _factor_ctx(factor_data),
+                       ctx + "\n\n【因子采集】\n" + _factor_ctx(factor_data, us=_is_us_run(r)),
                        cat, r, as_of, accept_manual, verified_by, skipped,
                        refresh=refresh_stance)
     if sb is None:

@@ -422,7 +422,14 @@ def build_prompt(
     与「可用事实」表同源 —— 提示词里出现裸数字、正文里却禁止引用，
     是自相矛盾的契约，这一点此前踩过。
     """
-    parts = [_BRIEF_RULES if brief else _RULES,
+    from ir_agent.market import is_us
+
+    rules = _BRIEF_RULES if brief else _RULES
+    if is_us(code):
+        # 美股没有卖方研报正文可引；引述示例换成 10-K 与一手机构，其余规则逐字不变
+        rules = rules.replace("确要引述年报或研报原文时", "确要引述 10-K 或机构原文时").replace(
+            "（「据年报披露，……」「某某证券研报指出，……」）", "（「据 10-K 披露，……」「据 IDC 统计，……」）")
+    parts = [rules,
              f"\n**标的**：{code}　**报告期**：{period}\n",
              "\n**可用事实**（左为含义，中为数值仅供你判断，右为必须写入的占位符）\n",
              catalog.render_for_prompt(), "\n"]

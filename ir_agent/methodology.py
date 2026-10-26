@@ -525,10 +525,44 @@ def build_prompt(industry: str, code: str, *, facts: str = "",
         blocks.append("【账本里已有的 key】\n" + "、".join(available_keys))
     from ir_agent.market import is_us
 
-    return PROMPT.format(industry=industry, code=code,
+    return _prompt_for(code).format(industry=industry, code=code,
                          market="美股" if is_us(code) else "A 股",
                          context=("\n" + "\n\n".join(blocks) + "\n"
                                   if blocks else ""))
+
+
+# 美股版：只换与市场相关的措辞，格式与规则逐字不变（解析器只认这一种写法）。
+# 营收单位必须与估值层一致 —— 美股工作簿与 `assume._base_revenue_scale` 都按百万美元。
+_US_REPLACE = (
+    ("**先用上面已入库的卖方研报**；只在它们不足以支撑方法论判断时才上网补。\n"
+     "（这不改变卖方资料的可引用范围：你读研报读的是**方法论**，产出的是分解式\n"
+     "的**框架**，不是任何一个因子的取值。）",
+     "**先用上面已入库的资料**（10-K、8-K 业绩新闻稿、电话会纪要、竞争对手 10-K、\n"
+     "一手研究机构新闻稿）；只在它们不足以支撑方法论判断时才上网补。\n"
+     "（这不改变资料的可引用范围：你读它们读的是**方法论**，产出的是分解式\n"
+     "的**框架**，不是任何一个因子的取值。）"),
+    ("年报经营情况讨论", "10-K 管理层讨论"),
+    ("研报价格跟踪", "机构价格跟踪"),
+    ("年报成本构成", "10-K 成本构成"),
+    ("营收的单位是亿元", "营收的单位是百万美元"),
+    ("你认为年报/公告里会**逐字出现**", "你认为 10-K / 8-K 里会**逐字出现**"),
+    ("不会出现在任何年报里", "不会出现在任何 10-K 里"),
+    ("代码会拿这个词在年报与公告全文里搜", "代码会拿这个词在 10-K 与 8-K 全文里搜"),
+    ("年报某一节 / 语料库某一篇", "10-K 某一节 / 语料库某一篇"),
+)
+
+
+def _prompt_for(code: str) -> str:
+    from ir_agent.market import is_us
+
+    if not is_us(code):
+        return PROMPT
+    out = PROMPT
+    for old, new in _US_REPLACE:
+        if old not in out:
+            raise AssertionError(f"美股预研提示词替换落空（A 股模板改过？）：{old[:30]}")
+        out = out.replace(old, new)
+    return out
 
 
 _RAW_HEADING = "## 分解式原始定义（供人工编辑与重跑读回）"

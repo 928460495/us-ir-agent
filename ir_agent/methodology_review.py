@@ -318,7 +318,8 @@ def extra_facts(model, *, ledger, as_of, sections=None, corpus=None,
             lines.append(f"- 缺 {'、'.join(lacking)} 的基期值（账本里没有），无法试算")
         else:
             consts = {c.name: c.value for c in model.constants}
-            for t, cn, key, scale in (("revenue", "营收", "revenue", Decimal(10) ** 8),
+            rev_scale, rev_unit = revenue_scale(ledger)
+            for t, cn, key, scale in (("revenue", "营收", "revenue", rev_scale),
                                       ("gross_margin", "毛利率", "gross_margin", 1)):
                 try:
                     got = evaluate(model.formulas[t], base, None, base, consts)
@@ -328,8 +329,19 @@ def extra_facts(model, *, ledger, as_of, sections=None, corpus=None,
                 actual = _latest_annual(ledger, key, as_of)
                 act = (f"{actual / scale}" if actual is not None else "报表里没有")
                 lines.append(f"- {cn}：公式第 0 年 = {got}；报表 = {act}"
-                             + ("（亿元）" if t == "revenue" else ""))
+                             + (f"（{rev_unit}）" if t == "revenue" else ""))
     return "\n".join(lines)
+
+
+def revenue_scale(ledger) -> tuple[Decimal, str]:
+    """试算对照报表营收时的换算：与预研提示词给模型的营收单位一致 —— A 股亿元、美股百万美元
+    （`assume._base_revenue_scale` 同一口径）。按账本营收事实的币种判断。"""
+    for (k, _p), facts in (getattr(ledger, "_facts", None) or {}).items():   # noqa: SLF001
+        if k == "revenue" and facts:
+            if facts[0].currency == "USD":
+                return Decimal(10) ** 6, "百万美元"
+            break
+    return Decimal(10) ** 8, "亿元"
 
 
 def _latest_annual(ledger, key: str, as_of):

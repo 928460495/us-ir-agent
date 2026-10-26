@@ -68,6 +68,13 @@ PROMPT = """为一份 A 股研究报告采集一个因子的数据。
 只输出上述格式的行。
 """
 
+# 美股版：换市场、加美国来源优先级（与 openweb.PROMPT_US 同一套规则）；格式与硬性要求逐字一致
+from ir_agent.sources.web import US_SOURCE_RULES  # noqa: E402
+
+PROMPT_US = PROMPT.replace("为一份 A 股研究报告", "为一份美股研究报告").replace(
+    "- 找不到就一行都不要输出，**不要用推测填充**。",
+    "- 找不到就一行都不要输出，**不要用推测填充**。" + US_SOURCE_RULES)
+
 
 @dataclass
 class Article:
@@ -251,13 +258,13 @@ def open_articles(items: list[Conclusion]) -> None:
 
 
 def search(client, factor_label: str, factor_key: str, industry: str,
-           as_of: date) -> Searched:
+           as_of: date, us: bool = False) -> Searched:
     """按因子联网，返回已打开文章、已标好数字出处的结论。
 
     **调用方必须传入已开启 WebSearch/WebFetch 的 client**（同 `web.search`）。
     """
     web.require_web()
-    raw = client(PROMPT.format(industry=industry, factor=factor_label,
+    raw = client((PROMPT_US if us else PROMPT).format(industry=industry, factor=factor_label,
                                key=factor_key, as_of=as_of.isoformat()))
     got = parse(raw, as_of)
     open_articles(got.items)

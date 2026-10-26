@@ -205,6 +205,15 @@ _OFFICIAL_ASCII = (
     "SEMI", "GARTNER", "TRENDFORCE", "IDC", "YOLE", "OMDIA", "IC INSIGHTS",
     "COUNTERPOINT", "WSTS", "SIA",
     "SEMI中国", "IDC中国", "GARTNER中国",
+    # 美国政府统计与贸易机构（美股，2026-10-26）。与上面同一条规则：只收能唯一指向该机构的
+    # 全称或惯用简称；「Federal Reserve Board」这类带部门名的写法单列全称，不靠修饰词拼
+    "U.S. CENSUS BUREAU", "US CENSUS BUREAU", "CENSUS BUREAU",
+    "BUREAU OF LABOR STATISTICS", "U.S. BUREAU OF LABOR STATISTICS", "BLS",
+    "BUREAU OF ECONOMIC ANALYSIS", "U.S. BUREAU OF ECONOMIC ANALYSIS", "BEA",
+    "U.S. ENERGY INFORMATION ADMINISTRATION", "ENERGY INFORMATION ADMINISTRATION", "EIA",
+    "FEDERAL RESERVE", "FEDERAL RESERVE BOARD", "BOARD OF GOVERNORS OF THE FEDERAL RESERVE SYSTEM",
+    "USTR", "OFFICE OF THE UNITED STATES TRADE REPRESENTATIVE",
+    "U.S. DEPARTMENT OF COMMERCE", "DEPARTMENT OF COMMERCE", "FEDERAL REGISTER",
 )
 
 # 允许的修饰词——白名单全称命中后，剩余部分必须能被这张表里的词
@@ -447,6 +456,19 @@ PROMPT = """为一份 A 股研究报告采集一个具体的数据点。
 """
 
 
+# 美股版：换市场、加美国来源优先级（与 openweb.PROMPT_US 同一套规则）；格式与硬性要求逐字一致。
+# conclusions.PROMPT_US 共用这段规则。
+US_SOURCE_RULES = """
+- 优先美国政府统计（Census、BEA、BLS、EIA、美联储等）与一手研究机构（IDC、Gartner、
+  Counterpoint、TrendForce 等）的原始页面；一手机构新闻稿原站拒绝访问时，给同一份新闻稿在
+  Business Wire、PR Newswire、GlobeNewswire 或该机构新闻室的转载页，发布机构仍写原机构。
+- 不要给 sec.gov 上的申报文件（10-K、10-Q、8-K 已由 EDGAR 直接入库）。
+- 只给 HTML 网页，不要 PDF（抓不了）。"""
+PROMPT_US = PROMPT.replace("为一份 A 股研究报告", "为一份美股研究报告").replace(
+    "- 找不到就一行都不要输出，**不要用推测填充**。",
+    "- 找不到就一行都不要输出，**不要用推测填充**。" + US_SOURCE_RULES)
+
+
 def require_web() -> None:
     """联网采集的总开关。`search` 与 `conclusions.search` 共用一份措辞。"""
     if not WEB_CAPABLE:
@@ -463,7 +485,7 @@ def require_web() -> None:
 
 
 def search(client, factor_label: str, factor_key: str, industry: str,
-           as_of: date) -> list[Finding]:
+           as_of: date, us: bool = False) -> list[Finding]:
     """按因子上网搜索证据。
 
     **调用方必须传入已显式开启 WebSearch/WebFetch 工具的 client**——
@@ -474,7 +496,7 @@ def search(client, factor_label: str, factor_key: str, industry: str,
     为 False（这条链路整体判定不可联网）时提前拒绝。
     """
     require_web()
-    raw = client(PROMPT.format(industry=industry, factor=factor_label,
+    raw = client((PROMPT_US if us else PROMPT).format(industry=industry, factor=factor_label,
                                key=factor_key, as_of=as_of.isoformat()))
     got = parse_findings(raw)
     # parse_findings 已经保证 published 不为 None（日期不明的发现在那一步

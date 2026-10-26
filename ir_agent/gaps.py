@@ -342,7 +342,7 @@ def _match_report(corpus, label: str,
     # `test_候选词在外层容器在内层`。
     for core in _core_candidates(label, search_term):
         for d in corpus.docs:
-            if d.tier is Tier.MEDIA:
+            if d.tier is Tier.MEDIA or d.channel == "peer_filing":
                 continue
             hit = _valid_hit(d.text, core)
             if hit is not None:
@@ -370,7 +370,9 @@ def _match_announce(corpus, label: str,
     # `test_候选词在外层容器在内层`。
     for core in _core_candidates(label, search_term):
         for d in corpus.docs:
-            if d.tier is not Tier.COMPANY:
+            # 竞争对手的 10-K 也是 COMPANY 级，但说的是它自己的业务：在这里命中会把对手的话
+            # 当成本司证据（用户 2026-10-26 决定：同业 10-K 不作因子文字证据，只供辩论与定性引用）
+            if d.tier is not Tier.COMPANY or d.channel == "peer_filing":
                 continue
             hit = _valid_hit(d.text, core)
             if hit is not None:
@@ -400,7 +402,7 @@ def _via_note(core: str, f: Factor) -> str:
 
 def collect(client, decomps: list[Decomposition], ledger: FactLedger,
             corpus, industry: str, as_of: date,
-            sections=None, annual_url: str = "") -> dict[str, FactorData]:
+            sections=None, annual_url: str = "", us: bool = False) -> dict[str, FactorData]:
     """逐因子采集。已在账本的跳过；缺的依次尝试②年报、③研报、④外部网络。
 
     ②或③命中就不再往下走——先近后远，同时省一次联网调用。`sections`/
@@ -453,7 +455,9 @@ def collect(client, decomps: list[Decomposition], ledger: FactLedger,
             out[f.key] = FactorData(
                 factor=f, status=ANNOUNCE,
                 note=f"「{excerpt}」——{doc.cite()}"
-                     "（文字依据，是否给出具体数值待人工确认）"
+                     + ("（电话会纪要，二手转存；管理层表述不得单独作假设依据）"
+                        if doc.channel == "transcript" else "")
+                     + "（文字依据，是否给出具体数值待人工确认）"
                      + _via_note(core, f),
                 source_url=doc.url, source_retrieved=doc.retrieved,
                 source_excerpt=excerpt)
@@ -472,7 +476,7 @@ def collect(client, decomps: list[Decomposition], ledger: FactLedger,
             continue
 
         try:
-            got = conclusions.search(client, f.label, f.key, industry, as_of)
+            got = conclusions.search(client, f.label, f.key, industry, as_of, us=us)
         except WebUnavailable as e:
             # 能力边界不是故障，整轮研究不该因此停摆。措辞里显式写
             # 「不能联网」而不是只转述异常原文。
@@ -611,7 +615,16 @@ def from_json(raw: dict, decomps: list[Decomposition]
     return out, notes
 
 
-def summary(data: dict[str, FactorData]) -> str:
+# 美股显示名：状态值本身不变（落盘、下游判断都用它），只换给人看的字。美股的②是 10-K，③命中的是
+# IDC / Counterpoint / 政府统计这类一手机构，不是券商研报。
+US_STATUS_LABEL = {ANNUAL: "10-K 披露", REPORT: "机构测算"}
+
+
+def status_label(status: str, us: bool = False) -> str:
+    return US_STATUS_LABEL.get(status, status) if us else status
+
+
+def summary(data: dict[str, FactorData], us: bool = False) -> str:
     """给人看的采集结果。**遗漏必须可见** —— 这正是分解的价值所在。"""
     lines = ["因子数据采集结果", ""]
     lines.append("| 因子 | 状态 | 来源 / 说明 |")
@@ -635,16 +648,18 @@ def summary(data: dict[str, FactorData]) -> str:
                 src = f"{src}｜{fd.note}"
         else:
             src = fd.note or "—"
-        lines.append(f"| {fd.factor.label} | {fd.status} | {src} |")
+        lines.append(f"| {fd.factor.label} | {status_label(fd.status, us)} | {src} |")
 
     # ②②.5③是文字命中，不是已核实的数值——必须与「已披露」「外部来源」
     # 分开摆出来，不能让状态列里挨在一起的几行字看起来证明力一样。
     textual = [fd.factor.label for fd in data.values()
                if fd.status in (ANNUAL, ANNOUNCE, REPORT)]
     if textual:
+        kinds = ("10-K 叙述、公司公告或机构文字", "10-K 披露/公告披露/机构测算") if us else \
+            ("年报叙述、公司公告或研报文字", "年报披露/公告披露/研报测算")
         lines += ["",
-                  f"📄 以下因子仅命中年报叙述、公司公告或研报文字"
-                  f"（年报披露/公告披露/研报测算），"
+                  f"📄 以下因子仅命中{kinds[0]}"
+                  f"（{kinds[1]}），"
                   f"是文字依据，待人工确认原文是否给出具体数值——"
                   f"命中关键词不等于拿到了数值：{'、'.join(textual)}。"]
 
