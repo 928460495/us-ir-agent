@@ -49,12 +49,3 @@ def test_美股无风险利率取美债十年_β注明由估值阶段计算(monk
     assert err == "" and "us-dcf" in human            # β 已在阶段 3 接入估值阶段，不再报「未生成」
 
 
-def test_美股行业给出FF49同业名单且聚合留待后续阶段(monkeypatch):
-    cls = us_industry.UsClassification(code="AAPL", name="Apple Inc.", path="3571",
-                                       used_path="FF49-35 Hardw 计算机", level=1)
-    peers = Peers(target="AAPL", target_name="Apple Inc.", classification=cls,
-                  members=[Member("DELL", "Dell"), Member("HPQ", "HP")], thin=True)
-    monkeypatch.setattr(us_industry, "peer_set_us", lambda t, store: peers)
-    human, prompt, err = full._load_industry("AAPL", _run(), AS_OF)
-    assert "FF49-35" in human and "DELL" in human
-    assert "行业聚合" in err and "阶段" in err

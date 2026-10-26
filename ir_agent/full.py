@@ -862,19 +862,73 @@ def _load_capm(code: str, r, as_of: date) -> tuple[str, str, str]:
     return ("\n".join(human), "\n".join(prompt), "；".join(errs))
 
 
-def _load_industry_us(code: str, r) -> tuple[str, str, str]:
-    """美股：FF49 行业与同业名单。行业聚合与画像要逐家取 companyfacts，阶段 4 与相对估值样本一并接入。"""
+def _load_industry_us(code: str, r, as_of: date) -> tuple[str, str, str]:
+    """美股：FF49 行业的同业逐家取 companyfacts → 年度数按期末就近重贴到本司财年 →
+    行业聚合与画像（沿用 A 股代码）。同业数据与行情挂在 r 上，可比与相对估值复用，不再重取。
+
+    行情失败不阻断聚合与画像（它们不用行情），只在说明里写清。
+    """
+    from ir_agent.industry_facts import aggregate, industry_facts
+    from ir_agent.ledger import LookAheadError
+    from ir_agent.sources import us_industry, us_peers, us_quotes
+    from ir_agent.sources.edgar_facts import period_ends
     from ir_agent.sources.industry import IndustryUnavailable
-    from ir_agent.sources.us_industry import peer_set_us
+    from ir_agent.us_align import calendarize
 
     try:
-        peers = peer_set_us(code, r.store)
+        peers = us_industry.peer_set_us(code, r.store)
     except IndustryUnavailable as e:
         return "", "", f"行业（{e}）"
-    names = "、".join(f"{m.code} {m.name}" for m in peers.members[:12])
-    more = f" 等 {len(peers.members)} 家" if len(peers.members) > 12 else ""
-    human = peers.summary() + f"\n  同业：{names}{more}"
-    return human, "", "行业聚合（美股版在阶段 4 与相对估值样本一并接入）"
+    prior = _prior_period(r.period)
+    if prior is None:
+        return "", "", f"行业聚合（无法推出 {r.period} 的上年同期）"
+    meta = r.sec_meta or {}
+    r.target_ends = period_ends(r.store.load(meta["companyfacts_sid"]).payload, meta["fye"])
+
+    print(f"行业聚合：{peers.classification.used_path}（{len(peers.members)} 家同业）…", file=sys.stderr)
+    notes: list[str] = []
+    books = us_peers.load_peer_books(peers.members, r.store, as_of, notes)
+    cache = {t: calendarize(b, r.target_ends, as_of) for t, b in books.items()}
+    errs: list[str] = []
+    try:
+        quotes, qnotes = us_quotes.fetch_peer_quotes(list(books), r.store)
+    except us_quotes.QuoteUnavailable as e:
+        quotes, qnotes = {}, []
+        errs.append(f"同业行情（{e}）—— 可比与相对估值将不可用")
+    r.peer_set, r.peer_books, r.peer_statements = peers, books, cache
+    r.peer_quotes, r.peer_notes = quotes, notes + qnotes
+
+    def fetch(c: str, period: str, when: date):
+        if c == peers.target:
+            try:
+                return r.ledger.get("revenue", period, as_of=when).value
+            except (KeyError, LookAheadError):
+                return None
+        f = cache.get(c, {}).get(("revenue", period))
+        return None if f is None or f.as_of > when else f.value
+
+    agg = aggregate(peers, r.period, prior, as_of, fetch)
+    for f in industry_facts(agg):
+        r.ledger.put(f)
+
+    # 画像要本司也在里面（它是行业的一员）—— 取账本里时点内可见的最新版本
+    me = {}
+    for (k, per), fs in r.ledger._facts.items():               # noqa: SLF001
+        seen = [f for f in fs if f.as_of <= as_of]
+        if seen:
+            me[(k, per)] = max(seen, key=lambda f: f.as_of)
+    prof_md = prof_pr = ""
+    try:
+        prof_md, prof_pr = _industry_profile(peers, agg, {**cache, peers.target: me}, r, as_of)
+    except Exception as e:                                  # noqa: BLE001
+        prof_md = f"（行业画像未生成：{e.__class__.__name__}）"
+
+    dropped = len(peers.members) - len(books)
+    head = (f"{peers.summary()}\n  同业财报：{len(books)} 家取到，{dropped} 家剔除；"
+            "年度数按期末最近的财年对齐到本司财年"
+            + "".join(f"\n    – {n}" for n in r.peer_notes))
+    return (f"{head}\n{agg.summary()}\n{prof_md}",
+            f"{agg.for_prompt()}\n{prof_pr}".rstrip(), "；".join(errs))
 
 
 def _load_industry(code: str, r, as_of: date) -> tuple[str, str, str]:
@@ -888,7 +942,7 @@ def _load_industry(code: str, r, as_of: date) -> tuple[str, str, str]:
     from ir_agent.market import is_us, market_of
 
     if is_us(code):
-        return _load_industry_us(code, r)
+        return _load_industry_us(code, r, as_of)
     from ir_agent.sources.eastmoney import fetch_statements_em
     from ir_agent.sources.industry import IndustryUnavailable, peer_set
 

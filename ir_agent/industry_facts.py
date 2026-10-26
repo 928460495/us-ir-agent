@@ -292,7 +292,8 @@ def industry_facts(agg: IndustryAggregate) -> list[Fact]:
         derived=both)
 
     if agg.covered:
-        add("industry.revenue", agg.total, "元", derived=src)
+        from ir_agent.market import money_unit
+        add("industry.revenue", agg.total, money_unit(agg.target), derived=src)
         add("industry.cr5", agg.cr5, "ratio", derived=src)
         add("company.market_share", agg.share, "ratio", derived=src)
         add("company.market_share_delta", agg.share_delta, "ratio",
