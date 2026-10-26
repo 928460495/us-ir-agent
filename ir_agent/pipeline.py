@@ -474,25 +474,14 @@ def _analyze(code: str, year: int, period_suffix: str, period: str, prior_period
                        annual_url=annual_url)
 
 
-SHARES_MAX_AGE_DAYS = 400      # 封面股数每份 10-Q / 10-K 都报；超过一年没更新就不可信
+from ir_agent.sources.us_quotes import SHARES_MAX_AGE_DAYS  # noqa: E402,F401  —— 原处导出，旧调用点不改
 
 
 def _latest_shares(led: FactLedger, as_of: date) -> tuple[Fact | None, str]:
-    """时点内可见的最新一期在外股数（封面数），以及取不到时的原因。
-
-    联网验收: BRK-B 最新一条封面股数是 2011 年的、GOOGL 一条都没有 —— 多类股公司按类别
-    申报，companyfacts 不含分维度事实。拿陈旧股数乘今天的股价会静默算错市值，宁可不算。
-    """
-    seen = [f for (k, _p), fs in led._facts.items() if k == "shares_outstanding"  # noqa: SLF001
-            for f in fs if f.as_of <= as_of]
-    if not seen:
-        return None, ("EDGAR 无封面在外股数（多类股公司按类别申报时 companyfacts 不含该数），"
-                      "不计算市值。")
-    f = max(seen, key=lambda f: f.as_of)
-    if (as_of - f.as_of).days > SHARES_MAX_AGE_DAYS:
-        return None, (f"EDGAR 封面在外股数最新一条申报于 {f.as_of.isoformat()}，已超过一年"
-                      "（多见于多类股公司），不计算市值。")
-    return f, ""
+    """时点内可见的最新一期在外股数（封面数）。规则在 `us_quotes.latest_shares`，同业市值共用。"""
+    from ir_agent.sources.us_quotes import latest_shares
+    return latest_shares((f for (k, _p), fs in led._facts.items() if k == "shares_outstanding"  # noqa: SLF001
+                          for f in fs), as_of)
 
 
 def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
