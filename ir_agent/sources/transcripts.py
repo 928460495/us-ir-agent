@@ -58,10 +58,12 @@ def fetch_transcripts(ticker: str, as_of: date, store, n: int = 2) -> tuple[list
     sid = store.save(source="defeatbeta_transcripts", payload=seen, url=URL,
                      fetched_at=datetime.now(), params={"symbol": symbol})
     docs = []
+    # 网址片段带上季度：同一次取回的几篇共用一个 parquet 与快照，只写快照编号时网址全同，
+    # 第二次调用读回按网址去重会把后几篇当重复丢掉（AAPL ② 实跑：Q2 纪要没读回）
     for r in seen:
         fy, fq = r["fiscal_year"], r["fiscal_quarter"]
         docs.append(Document(
-            doc_id=f"defeatbeta_{symbol}_{fy}Q{fq}", url=f"{URL}#{sid}", publisher=PUBLISHER,
+            doc_id=f"defeatbeta_{symbol}_{fy}Q{fq}", url=f"{URL}#{sid}/{symbol}_{fy}Q{fq}", publisher=PUBLISHER,
             tier=Tier.COMPANY, title=f"FY{fy} Q{fq} 业绩电话会纪要",
             published=date.fromisoformat(str(r["report_date"])[:10]), retrieved=as_of,
             text=_text(r.get("transcripts")), prompt_limit=PROMPT_LIMIT, channel="transcript"))

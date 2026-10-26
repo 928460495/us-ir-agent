@@ -171,3 +171,16 @@ def test_只有账本依据的行业规模不另记外部规模_也不报错(tmp
     size = SizeClaim(label="账本合计", value=D(1), unit="亿美元", period="2025FY",
                      bases=[Basis.fact("[[industry.revenue@2025FY]]")])
     assert full._size_source(size, Corpus(as_of=AS_OF), SnapshotStore(tmp_path)) == (None, "")
+
+
+def test_同一次取回的多篇纪要网址各不相同_读回不被当成重复丢掉(tmp_path, monkeypatch):
+    from ir_agent.sources import announce, transcripts
+    monkeypatch.setattr(transcripts, "_query", lambda sym: [
+        {"symbol": "AAPL", "fiscal_year": 2026, "fiscal_quarter": q, "report_date": d,
+         "transcripts": [{"paragraph_number": 1, "speaker": "Tim", "content": f"q{q}"}]}
+        for q, d in ((3, "2026-07-30"), (2, "2026-04-30"))])
+    docs, _ = transcripts.fetch_transcripts("AAPL", AS_OF, SnapshotStore(tmp_path))
+    assert len({d.url for d in docs}) == 2
+    res = announce.AnnounceResult(docs=docs, candidates=2, picked=2)
+    announce.save(res, tmp_path / "a.json")
+    assert len(announce.load(tmp_path / "a.json", Corpus(as_of=AS_OF)).docs) == 2
