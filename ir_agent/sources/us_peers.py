@@ -60,7 +60,9 @@ def _one(ticker: str, name: str, cik: str, store, as_of: date) -> PeerBook | str
         return "没有 us-gaap 事实（多为只报 IFRS 的外国发行人）"
     facts = parse_companyfacts(doc, fye, cf_sid, notes=[])
     if not any(f.unit == MONEY_UNIT for f in facts):
-        return "us-gaap 事实里没有以美元计的定期报告数据"
+        # 实测 AAPL 同业 10 家落在这里，多为以色列等外国发行人：报 us-gaap、但申报表是 20-F / 40-F，
+        # 不在 10-K / 10-Q 范围内（年报一年一份、无季报，时点与 TTM 口径都对不上本司）
+        return "没有 10-K / 10-Q 申报的美元数据（多为提交 20-F / 40-F 的外国发行人）"
     if latest_shares(facts, as_of)[0] is None:
         # 多类股公司（GOOGL、BRK）按类别申报股数，companyfacts 不收 —— 从最新一份申报的实例里加总
         facts += [f for f in xbrl_instance.load_dimensional(cik, sub, fye, store, as_of, [], latest_only=True)
