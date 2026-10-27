@@ -3145,6 +3145,9 @@ def _anchor_banner(cal: dict, labels: list[str], rebased: bool = False, us: bool
     """
     it = cal.get("interim")
     first = labels[0] if labels else "首个预测年"
+    if it and it.get("off"):
+        return (f"> ℹ **{first} 不锚定**：{cal.get('interim_skip') or '上游关闭首年锚定'}"
+                "——批准清单上的首年取值直接进模型。\n\n")
     if (not it or not it.get("fy_rev")) and cal.get("interim_skip"):
         # 有已披露中期却没锚定：如实说（终审 2026-10-19，此前是静默的）。
         return (f"> ⚠ **{first} 未锚定**：本年已有中期报告，但不能按季度估算首年"
@@ -3458,7 +3461,7 @@ def run_valuation(code: str, r, as_of: date, out_dir: str | Path,
     rel_res = None
     stage = Stage.NOT_APPLICABLE
     try:
-        print("三表 DCF 建模（ashare-dcf）…", file=sys.stderr)
+        print(f"三表 DCF 建模（{_engine_name(code)}）…", file=sys.stderr)
         dcf_res = dcf.run(code, out, as_of=as_of, ledger=r.ledger, **_dcf_kw(r),
                           assumptions=a, approved_by=approved_by)
     except dcf.DcfUnavailable as e:
@@ -3542,19 +3545,30 @@ def run_valuation(code: str, r, as_of: date, out_dir: str | Path,
     build_dashboard(r, path=out / "dashboard.html", context=md, dcf=dcf_res)
     arts["看板"] = str(out / "dashboard.html")
 
-    reason = ""
-    if dcf_res is not None:
-        up = dcf_res.upside
-        reason = (f"每股内在价值 {dcf_res.value_per_share:,.2f} 元 vs 现价 "
-                  f"{dcf_res.price:,.2f} 元"
-                  + (f"，空间 {up:+.1%}" if up is not None else "")
-                  + f"（WACC {dcf_res.wacc:.2%}，终值占企业价值 "
-                  f"{dcf_res.terminal_share:.1%}；判断项经 {approved_by} 核实）")
+    reason = _value_reason(dcf_res, approved_by, code) if dcf_res is not None else ""
 
     return ResearchOutcome(
         code=code, period=r.period, as_of=as_of, stage=stage,
         artifacts=arts, skipped=skipped, upheld=0,
         cost_usd=Decimal(str(cost)), route_reason=reason, phase="value")
+
+
+def _engine_name(code: str) -> str:
+    from ir_agent.market import is_us
+    return "us-dcf" if is_us(code) else "ashare-dcf"
+
+
+def _value_reason(dcf_res, approved_by: str, code: str) -> str:
+    """终端产物清单的估值结论一行。金额单位按市场（此前写死「元」，美股显示成元）。"""
+    from ir_agent.market import money_unit
+
+    unit = money_unit(code)
+    up = dcf_res.upside
+    return (f"每股内在价值 {dcf_res.value_per_share:,.2f} {unit} vs 现价 "
+            f"{dcf_res.price:,.2f} {unit}"
+            + (f"，空间 {up:+.1%}" if up is not None else "")
+            + f"（WACC {dcf_res.wacc:.2%}，终值占企业价值 "
+            f"{dcf_res.terminal_share:.1%}；判断项经 {approved_by} 核实）")
 
 
 def _relative_valuation(code, r, as_of: date, dcf_res, snapshot_dir):
@@ -3563,11 +3577,14 @@ def _relative_valuation(code, r, as_of: date, dcf_res, snapshot_dir):
     返回 (结果或 None, skipped 条目)。**任何失败都不抛出** —— 相对估值是与 DCF 并列的
     交叉验证，缺了它研报第 8 节只讲 DCF 并说明原因，不能把 DCF 与研报一起拖垮。
     """
-    from ir_agent import relval, relval_data
+    from ir_agent import relval, relval_data, relval_data_us
+    from ir_agent.market import is_us
 
+    us = is_us(code)
     try:
-        tgt, sample, comps, shares, price, notes = relval_data.gather(r, as_of, snapshot_dir)
-        bands, cnotes = relval.comps_bands(comps, tgt, shares)
+        gather = relval_data_us.gather_us if us else relval_data.gather
+        tgt, sample, comps, shares, price, notes = gather(r, as_of, snapshot_dir)
+        bands, cnotes = relval.comps_bands(comps, tgt, shares, kinds=relval.kinds_for(tgt, us))
         regs = {k: relval.regress(k, sample, tgt, shares) for k in relval.REG_SPEC}
         res = relval.RelvalResult(
             as_of=as_of, price=price, shares=shares, target=tgt, comps=bands,

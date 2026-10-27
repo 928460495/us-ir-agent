@@ -112,3 +112,18 @@ def test_苹果完整估值链_验算三档蒙特卡洛(tmp_path):
     res = dcf.run("AAPL", tmp_path / "out", as_of=TODAY, ledger=r.ledger, **full._dcf_kw(r))
     assert res.verified and set(res.scenario_ps) == {"bear", "base", "bull"}
     assert res.mc and res.mc["p5"] < res.mc["p50"] < res.mc["p95"]
+
+
+def test_苹果相对估值确定性链路(tmp_path):
+    """阶段 4 验收（只跑 AAPL，用户 D7）：取数 → 行业（全 FF49 同业）→ 可比 → 相对估值，不调模型。"""
+    from ir_agent import full, pipeline, relval
+    r = pipeline.run("AAPL", 2025, TODAY, snapshot_dir=tmp_path / "snap")
+    r.code = "AAPL"
+    full._load_industry_us("AAPL", r, TODAY)
+    full._load_comps("AAPL", r, TODAY, tmp_path / "snap")
+    res, skipped = full._relative_valuation("AAPL", r, TODAY, None, tmp_path / "snap")
+    assert res is not None, skipped
+    assert res.sample_size >= relval.MIN_REG_N
+    assert any(b is not None for b in res.comps.values())
+    assert all(g.n > 0 for g in res.regs.values())
+    assert res.target.np_basis.startswith("TTM 截至 ")
