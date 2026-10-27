@@ -92,3 +92,24 @@ def test_观测带TTM营收_与EBITDA同截止期():
     o = obs_from_ledger("AAPL", "Apple", led, "2025FY", date(2026, 10, 26), D(4000))
     assert o.revenue == D(400) * (D("0.8") + 1 - D("0.7"))       # TTM 截至 2026Q1-Q3
     assert "2026Q1-Q3" in o.flow_basis
+
+
+def test_本司倍数分母落账本并在摘要里点明是TTM不是年报():
+    """AAPL ④ 实跑：研报拿年报利润去核 PE(TTM)，对不上，就把 PE 可比法整个排除 —— 分母没说清。"""
+    from datetime import date
+    from ir_agent.citation import audit_bare_numbers
+    from ir_agent.relval import to_facts
+    from tests.test_relval import make_result
+    res = make_result()
+    res.target.revenue, res.target.eps_ntm = D(500), D("2.5")
+    res.target.code = "AAPL"
+    facts = {f.key: f for f in to_facts(res, date(2026, 10, 26))}
+    assert facts["valuation.rel_target_np"].value == res.target.net_profit
+    assert facts["valuation.rel_target_np"].unit == "美元"
+    assert facts["valuation.rel_target_ebitda"].value == res.target.ebitda
+    assert facts["valuation.rel_target_revenue"].value == D(500)
+    assert facts["valuation.rel_target_eps_ntm"].value == D("2.5")
+    s = res.summary()
+    assert "[[valuation.rel_target_np@" in s and "不是年报" in s
+    line = next(x for x in s.splitlines() if "rel_target_np" in x)
+    assert audit_bare_numbers(line) == []

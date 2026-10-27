@@ -354,6 +354,10 @@ class RelvalResult:
         """进撰写提示词。**只用占位符**，原因文字不含数字 —— 与估值摘要同一契约。"""
         at = f"@{self.as_of.isoformat()}"
         lines = [f"相对估值（可比沿用原名单；回归样本为{self.industry}行业全体）",
+                 "  本司分母（与同业同一口径，倍数 × 分母 → 每股价值）：归母净利润 "
+                 f"[[valuation.rel_target_np{at}]]、EBITDA [[valuation.rel_target_ebitda{at}]]"
+                 + ("（滚动十二个月，截至本司最新已披露季度 —— 不是年报利润，截止期见相对估值页"
+                    "「利润口径」列）" if self.target.np_basis.startswith("TTM") else "（最近完整财年）"),
                  "  可比法（同业 P25／中位数／P75 的倍数 → 本司每股价值）："]
         for kind in self.comps:
             if self.comps.get(kind) is None:
@@ -399,6 +403,13 @@ def to_facts(res: RelvalResult, as_of: date,
 
     money = money_unit(res.target.code)
     out = []
+    # 本司的倍数分母：撰写时要能拿它对账（AAPL ④ 实跑：研报拿年报利润去核 PE(TTM) 对不上，把 PE
+    # 可比法整个排除了 —— 分母其实是最新季度的 TTM，只是没进账本、没人看得见）
+    t = res.target
+    for key, val, unit in (("np", t.net_profit, money), ("ebitda", t.ebitda, money),
+                           ("revenue", t.revenue, money), ("eps_ntm", t.eps_ntm, f"{money}/股")):
+        if val is not None:
+            out.append(f(f"valuation.rel_target_{key}", val, unit))
     for kind, b in res.comps.items():
         if b is None:
             continue
