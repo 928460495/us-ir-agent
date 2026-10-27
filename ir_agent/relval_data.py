@@ -157,7 +157,8 @@ def flow_end(led: FactLedger, as_of: date) -> tuple[int, int] | None:
                         reverse=True):
         cands.append(f_end)
     for end in cands:
-        for per in (_label(end), _label((end[0] - 1, 4)), _label((end[0] - 1, 2))):
+        # 上年同期累计：A 股截止期只有 H1 / FY；美股任一季（Q1-Q3 要上年 Q1-Q3，不是 H1）
+        for per in (_label(end), _label((end[0] - 1, 4)), _label((end[0] - 1, end[1]))):
             _ensure_da(led, per, as_of)
         if all(flow_ttm(led, k, end, as_of) is not None for k in _ebitda_parts(led)):
             return end
@@ -175,7 +176,7 @@ def _ebitda_ttm(led: FactLedger, end: tuple[int, int] | None,
         return None
     us = _flow_quarters(led) != _HALF_ENDS
     for q in (end, _prev_quarter(end) if end[1] == 4 or us else (end[0] - 1, 4)):
-        for per in (_label(q), _label((q[0] - 1, 4)), _label((q[0] - 1, 2))):
+        for per in (_label(q), _label((q[0] - 1, 4)), _label((q[0] - 1, q[1]))):
             _ensure_da(led, per, as_of)
         vals = [flow_ttm(led, k, q, as_of) for k in _ebitda_parts(led)]
         if all(v is not None for v in vals):
@@ -244,6 +245,10 @@ def obs_from_ledger(code: str, name: str, led: FactLedger, period: str,
         if op is not None and da is not None:
             eb = (op + da + max(ie or Decimal(0), Decimal(0)), f"FY {period}")
     growth, gbasis = _growth(led, period, as_of, fe)
+    # TTM 营收（EV/Sales 的分母）：与 EBITDA 同一截止期，取不到退回 period 的年报
+    revenue = flow_ttm(led, "revenue", fe, as_of) if fe is not None else None
+    if revenue is None:
+        revenue = _v(led, "revenue", period, as_of)
 
     equity_parent = bv("equity_attr_parent")
     roe = (net_profit / equity_parent
@@ -254,7 +259,7 @@ def obs_from_ledger(code: str, name: str, led: FactLedger, period: str,
                    debt=debt, cash=bv("cash_and_equivalents"),
                    ebitda=eb[0] if eb else None, roe=roe,
                    growth=growth, growth_basis=gbasis,
-                   bs_basis=bs, flow_basis=eb[1] if eb else "")
+                   bs_basis=bs, flow_basis=eb[1] if eb else "", revenue=revenue)
 
 
 def obs_from_facts(code: str, name: str, facts: dict, period: str,

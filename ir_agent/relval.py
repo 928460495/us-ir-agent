@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -21,7 +22,10 @@ from ir_agent.industry_profile import _median, _quartiles
 from ir_agent.market import money_unit
 
 KINDS = ("pe", "pb", "ev_ebitda")
-LABEL = {"pe": "PE(TTM)", "pb": "PB", "ev_ebitda": "EV/EBITDA"}
+# 美股（设计「四.3」）：PE 同时给 TTM 与 NTM（NTM 只有本司与可比有一致预期）；亏损公司加用 EV/Sales
+US_KINDS = ("pe", "pe_ntm", "pb", "ev_ebitda", "ev_sales")
+LABEL = {"pe": "PE(TTM)", "pb": "PB", "ev_ebitda": "EV/EBITDA",
+         "pe_ntm": "PE(NTM)", "ev_sales": "EV/Sales"}
 # 四分位至少要 4 个值（`industry_profile._quartiles`）—— 三家里的「P25」没有意义
 MIN_BAND = 4
 
@@ -55,6 +59,13 @@ class PeerObs:
     # 同业对齐本司，没出就退上一期 —— 逐家标在页面上。
     bs_basis: str = ""
     flow_basis: str = ""
+    # 美股扩展（默认值让 A 股调用点不改）：TTM 营收（EV/Sales 用）、每股现价与 NTM EPS（PE(NTM) 用）、
+    # 按期末日期对齐时落后一季的标注（键 "np" / "bs"，值是页面上要标的说明）
+    revenue: Decimal | None = None
+    price: Decimal | None = None
+    eps_ntm: Decimal | None = None
+    ntm_basis: str = ""
+    lags: dict[str, str] = field(default_factory=dict)
 
     @property
     def minority(self) -> Decimal | None:
@@ -82,7 +93,18 @@ def multiples(o: PeerObs) -> dict[str, Decimal | None]:
         "pe": o.market_cap / o.net_profit if _pos(o.net_profit) else None,
         "pb": o.market_cap / o.equity_parent if _pos(o.equity_parent) else None,
         "ev_ebitda": ev / o.ebitda if ev is not None and _pos(o.ebitda) else None,
+        # NTM 用每股口径：一致预期给的是每股收益，乘回总股本会混进稀释口径差
+        "pe_ntm": o.price / o.eps_ntm if _pos(o.price) and _pos(o.eps_ntm) else None,
+        "ev_sales": ev / o.revenue if ev is not None and _pos(o.revenue) else None,
     }
+
+
+def kinds_for(target: PeerObs, us: bool) -> tuple[str, ...]:
+    """本次要算的倍数。A 股不变；美股加 PE(NTM)，本司 TTM 归母净利润不为正时再加 EV/Sales
+    （设计「亏损公司加用」—— 盈利公司的 EV/Sales 不看利润率，拿来比反而误导）。"""
+    if not us:
+        return KINDS
+    return tuple(k for k in US_KINDS if k != "ev_sales" or not _pos(target.net_profit))
 
 
 def implied_price(kind: str, mult: Decimal, target: PeerObs,
@@ -97,6 +119,12 @@ def implied_price(kind: str, mult: Decimal, target: PeerObs,
             return None
         return (mult * target.ebitda - target.debt + target.cash
                 - target.minority) / shares
+    if kind == "pe_ntm":
+        return mult * target.eps_ntm if _pos(target.eps_ntm) else None
+    if kind == "ev_sales":
+        if not _pos(target.revenue) or target.cash is None or target.minority is None:
+            return None
+        return (mult * target.revenue - target.debt + target.cash - target.minority) / shares
     raise ValueError(kind)
 
 
@@ -117,18 +145,20 @@ def _target_metric_ok(kind: str, t: PeerObs) -> bool:
 
 
 def comps_bands(peers: list[PeerObs], target: PeerObs,
-                shares: Decimal) -> tuple[dict[str, Band | None], list[str]]:
+                shares: Decimal, kinds: tuple[str, ...] = KINDS
+                ) -> tuple[dict[str, Band | None], list[str]]:
     """同业 P25 / 中位数 / P75 × 本司指标。第二项是「不适用」的原因，每条以倍数名开头。"""
     if not peers:
         # 可比名单没取到（可比分析未完成）—— 说成「不足四家」会误导
-        return ({k: None for k in KINDS},
-                [f"{LABEL[k]}：可比名单未取到，不适用" for k in KINDS])
+        return ({k: None for k in kinds},
+                [f"{LABEL[k]}：可比名单未取到，不适用" for k in kinds])
     bands: dict[str, Band | None] = {}
     why: list[str] = []
-    for kind in KINDS:
+    for kind in kinds:
         if not _target_metric_ok(kind, target):
             bands[kind] = None
-            why.append(f"{LABEL[kind]}：本司对应指标为负或缺失，不适用")
+            why.append(f"{LABEL[kind]}：本司无一致预期（或预期为负），只给 TTM" if kind == "pe_ntm"
+                       else f"{LABEL[kind]}：本司对应指标为负或缺失，不适用")
             continue
         vals = [m for p in peers if (m := multiples(p)[kind]) is not None]
         q = _quartiles(vals)
@@ -184,6 +214,7 @@ def _screen(kind: str, peers: list[PeerObs], target: PeerObs):
     rows: list[tuple[str, str, float, float]] = []
     excluded: list[tuple[str, str, str]] = []
     flags: dict[str, str] = {}
+    dated = _dated(target.np_basis)
     for p in peers:
         if p.code == target.code:
             excluded.append((p.code, p.name, "本司"))
@@ -198,10 +229,17 @@ def _screen(kind: str, peers: list[PeerObs], target: PeerObs):
             marks = []
             if xf == "growth" and p.growth_basis == "1y":
                 marks.append("一年增速")
-            if yk == "pe" and p.np_basis != target.np_basis:
+            if dated:
+                # 美股：各家财年不同，期间标签天然不同 —— 按期末日期对齐时已判过是否落后一季，
+                # 只标那几家（gather_us 写进 lags）
+                if yk == "pe" and p.lags.get("np"):
+                    marks.append(p.lags["np"])
+                if yk == "pb" and p.lags.get("bs"):
+                    marks.append(p.lags["bs"])
+            elif yk == "pe" and p.np_basis != target.np_basis:
                 # 同业还没出本司最新那一季，用了上一季 TTM 或年报（用户决定）—— 逐家标出
                 marks.append(f"利润 {p.np_basis}")
-            if yk == "pb" and p.bs_basis and p.bs_basis != target.bs_basis:
+            elif yk == "pb" and p.bs_basis and p.bs_basis != target.bs_basis:
                 marks.append(f"净资产 {p.bs_basis}")
             if marks:
                 flags[p.code] = "；".join(marks)
@@ -216,6 +254,11 @@ def _screen(kind: str, peers: list[PeerObs], target: PeerObs):
         rows = keep
     kept = {r[0] for r in rows}
     return rows, excluded, {c: f for c, f in flags.items() if c in kept}
+
+
+def _dated(basis: str) -> bool:
+    """利润口径是按期末日期写的（美股 gather_us：「TTM 截至 2026-06-27」）。"""
+    return bool(re.fullmatch(r"TTM 截至 \d{4}-\d{2}-\d{2}", basis or ""))
 
 
 def regress(kind: str, sample: list[PeerObs], target: PeerObs,
@@ -267,7 +310,8 @@ def regress(kind: str, sample: list[PeerObs], target: PeerObs,
         r.why = "斜率不显著"
     elif r.x0 is None:
         r.why = f"本司缺{_X_CN[xf]}，不适用"
-    elif xf == "growth" and target.growth_basis != "3y":
+    elif xf == "growth" and target.growth_basis not in ("3y", "TTM 3y"):
+        # 「TTM 3y」也是三年复合（截止期为中报 / 季报时的写法），只有一年数据才停
         # 本司 x₀ 与样本不同口径，算出的应得倍数是错的 —— 停下，不静默算价
         r.why = "本司营收增速只有一年数据，与样本的三年复合增速口径不同"
     elif r.fit_mult <= 0 or r.lo_mult <= 0:
@@ -311,7 +355,7 @@ class RelvalResult:
         at = f"@{self.as_of.isoformat()}"
         lines = [f"相对估值（可比沿用原名单；回归样本为{self.industry}行业全体）",
                  "  可比法（同业 P25／中位数／P75 的倍数 → 本司每股价值）："]
-        for kind in KINDS:
+        for kind in self.comps:
             if self.comps.get(kind) is None:
                 continue
             k = f"valuation.rel_{kind}"
