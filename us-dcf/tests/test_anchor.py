@@ -123,3 +123,15 @@ def test_本年已满四季不锚定也不截断():
     cur[("2025-10-01", "2025-12-31")] = (140, 84)
     blk, (it, skip) = _anchor({**Q24, **cur})
     assert it["fy_rev"] is None and "新年报" in skip
+
+
+def test_上游关闭锚定_中期块标不锚定并写明原因():
+    import us_calibrate as UC
+    itm = {"q_prev_rev": [1, 1, 1, 1], "q_prev_cogs": [1, 1, 1, 1], "q_cur_rev": [1.2, 1.2],
+           "q_cur_cogs": [1.1, 1.1], "label": "前 2 个季度"}
+    got, why = UC.anchor_interim(itm, enabled=False)
+    assert got["fy_rev"] is None and got["fy_cogs"] is None and got["off"] is True
+    assert why == UC.ANCHOR_OFF_REASON and "判断项" in why
+    assert UC.anchor_interim(None, enabled=False) == (None, None)
+    on, why_on = UC.anchor_interim(itm)
+    assert on["fy_rev"] is not None and why_on is None and not on.get("off")

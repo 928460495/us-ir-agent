@@ -200,3 +200,19 @@ def test_指数名标普500不算裸数字():
     from ir_agent.citation import audit_bare_numbers
     assert audit_bare_numbers("β 对标普 500 回归，对照 S&P 500 指数") == []
     assert audit_bare_numbers("营收 500 亿") != []              # 白名单只放过指数名
+
+
+def test_美股调用us_dcf时关闭首年锚定(tmp_path, monkeypatch):
+    seen = _stub_engine(monkeypatch, {"缺失": [], "拆股": []})
+    led, ctx = _ctx(tmp_path)
+    D_, C_, _, _ = _engine_mods()
+    dcf._calibrate_us(D_, C_, "AAPL", AS_OF, led, 5, ctx)
+    assert seen["anchor"] is False
+
+
+def test_批准清单_美股主动不锚定的横幅说明首年判断项直接进模型():
+    from ir_agent import full
+    cal = {"interim": {"fy_rev": None, "fy_cogs": None, "off": True},
+           "interim_skip": "上游关闭首年锚定：ir-agent 美股版首年直接用判断项（用户 2026-10-27 决定）"}
+    b = full._anchor_banner(cal, ["FY2026E"], us=True)
+    assert "FY2026E 不锚定" in b and "直接进模型" in b and "不能按季度估算" not in b

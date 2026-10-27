@@ -125,10 +125,18 @@ def quarterly_estimate(prev_rev, prev_cogs, cur_rev, cur_cogs) -> tuple[dict | N
 
 
 
-def anchor_interim(itm: dict | None) -> tuple[dict | None, str | None]:
-    """中期块 → (带首年估算的中期块, 不锚定的原因)。不锚定时 fy_rev / fy_cogs 为 None。"""
+ANCHOR_OFF_REASON = "上游关闭首年锚定：ir-agent 美股版首年直接用判断项（用户 2026-10-27 决定）"
+
+
+def anchor_interim(itm: dict | None, enabled: bool = True) -> tuple[dict | None, str | None]:
+    """中期块 → (带首年估算的中期块, 不锚定的原因)。不锚定时 fy_rev / fy_cogs 为 None。
+
+    `enabled=False`：上游（ir-agent 美股版）关闭锚定 —— 中期块照样保留（工作簿第三小节写明
+    「本次不锚定」与原因），只是不估算首年，`off` 标出这是主动关闭而非数据不足。"""
     if not itm:
         return itm, None
+    if not enabled:
+        return {**itm, "fy_rev": None, "fy_cogs": None, "off": True}, ANCHOR_OFF_REASON
     if itm.get("skip"):
         return {**itm, "fy_rev": None, "fy_cogs": None}, itm["skip"]
     qe, why = quarterly_estimate(itm["q_prev_rev"], itm["q_prev_cogs"], itm["q_cur_rev"], itm["q_cur_cogs"])
@@ -141,7 +149,8 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
               stmts: dict | None = None, quote: dict | None = None,
               px: pd.DataFrame | None = None, mkt: pd.DataFrame | None = None,
               facts: dict | None = None, shares: float | None = None,
-              splits: list | None = None, meta: dict | None = None) -> dict:
+              splits: list | None = None, meta: dict | None = None,
+              anchor: bool = True) -> dict:
     """校准。上游（ir-agent）可注入数据，注入的部分不再自行取数：
 
     - stmts：与 `D.statements` 同形状的报表（事实账本供数，分析层与估值层同源）；
@@ -169,7 +178,7 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
 
     rf, rfd = D.riskfree()
     erp_i = D.damodaran_erp()          # 市场隐含 ERP，每月更新
-    itm, itm_skip = anchor_interim(D.interim_block(g, ends))   # 年报之后已披露的季度（首年锚定）
+    itm, itm_skip = anchor_interim(D.interim_block(g, ends), enabled=anchor)   # 年报之后已披露的季度（首年锚定）
     geo = D.geo_weighted_erp(symbol, erp_i["erp"])   # 收入地域加权 ERP
     px = px if px is not None else D.prices(meta["ticker"])
     mkt = mkt if mkt is not None else D.index_prices()

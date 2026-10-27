@@ -300,7 +300,9 @@ def _calibrate_us(D, C, code: str, as_of: date, ledger, years: int, us_ctx: dict
                              "不另行直连 SEC 补取（那一份不按分析时点过滤，与分析层不同源）")
     try:
         mi = M.market_inputs(code, as_of, store, ledger)
-        cal = C.calibrate(code, years, meta=_us_meta(code, sub), facts=M.pit_us_gaap(doc, as_of),
+        # 美股不做首年锚定（用户 2026-10-27）：首年直接用 ③ 批准的判断项。苹果第四财季是
+        # 新机季，按年初至今同比外推会把季节性带进全年（AAPL ③ 审核者指出锚定 +16% 与判断 +9% 打架）
+        cal = C.calibrate(code, years, anchor=False, meta=_us_meta(code, sub), facts=M.pit_us_gaap(doc, as_of),
                           shares=float(shares.value) / 1e6, splits=mi["splits"],
                           quote=mi["quote"], px=mi["px"], mkt=mi["mkt"])
     except DcfUnavailable:
