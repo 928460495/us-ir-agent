@@ -512,11 +512,15 @@ def verify_all_scenarios(path: str, quiet: bool = False, values: dict | None = N
         if sc == cur:
             f, dv = verify(path, quiet=True)
         else:
-            tmp = os.path.join(tempfile.gettempdir(), f"_sc{sc}_" + os.path.basename(path))
-            shutil.copy(path, tmp)
-            w = load_workbook(tmp); w["1_Assumptions"].cell(sr, 2).value = sc; w.save(tmp)
-            f, dv = verify(tmp, quiet=True)
-            os.remove(tmp)
+            # 每次一个独立临时目录：固定文件名在两次估值同时跑时会互删（测试并行时实测）
+            tdir = tempfile.mkdtemp(prefix=f"_sc{sc}_")
+            tmp = os.path.join(tdir, os.path.basename(path))
+            try:
+                shutil.copy(path, tmp)
+                w = load_workbook(tmp); w["1_Assumptions"].cell(sr, 2).value = sc; w.save(tmp)
+                f, dv = verify(tmp, quiet=True)
+            finally:
+                shutil.rmtree(tdir, ignore_errors=True)
         if values is not None and dv and dv.get("ps") is not None:
             values[nm] = float(dv["ps"])
         out += [(nm,) + x for x in f]

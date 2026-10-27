@@ -299,14 +299,14 @@ def verify_all_scenarios(path, quiet=False, values=None):
         if sc==cur:
             f=path
         else:
-            f=os.path.join(tempfile.gettempdir(), f"_sc{sc}_"+os.path.basename(path))
+            # 每次一个独立临时目录：固定文件名在两次估值同时跑时会互删
+            f=os.path.join(tempfile.mkdtemp(prefix=f"_sc{sc}_"), os.path.basename(path))
             shutil.copy(path,f); w=_lw(f); w["1_假设"].cell(sr,2,sc); w.save(f)
         fails,dv=verify(f, quiet=True)
         if values is not None and dv and dv.get("ps") is not None:
             values[nm]=dv["ps"]
         if sc!=cur:
-            try: os.remove(f)
-            except OSError: pass
+            shutil.rmtree(os.path.dirname(f), ignore_errors=True)
         allf += [(nm,)+x for x in fails]
     if not quiet:
         print(f"三情景验算：{'✅ 全部通过' if not allf else f'❌ {len(allf)} 项失败'}")

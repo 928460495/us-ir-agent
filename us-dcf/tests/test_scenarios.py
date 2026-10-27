@@ -45,3 +45,13 @@ def test_判断项按三档写入(tmp_path):
     sc = {}
     assert V.verify_all_scenarios(path, quiet=True, values=sc) == []
     assert sc["Bull"] > sc["Base"] > sc["Bear"]
+
+
+def test_三档临时副本每次调用位置不同_并行估值不互相删文件(monkeypatch):
+    import shutil
+    seen = []
+    real = shutil.copy
+    monkeypatch.setattr(shutil, "copy", lambda src, dst: (seen.append(str(dst)), real(src, dst))[1])
+    V.verify_all_scenarios(str(FIX), quiet=True)
+    V.verify_all_scenarios(str(FIX), quiet=True)
+    assert len(seen) == 4 and len(set(seen)) == 4
