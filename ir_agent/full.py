@@ -165,10 +165,16 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     peer_docs, peer_notes = peer_filings.peer_10k_docs(r, as_of)
     for d in peer_docs:
         r.corpus.add_if_visible(d)
-    fye = r.store.load(r.sec_meta["submissions_sid"]).payload.get("fiscalYearEnd") or ""
+    sub_payload = r.store.load(r.sec_meta["submissions_sid"]).payload
+    fye = sub_payload.get("fiscalYearEnd") or ""
     cs = fmp.fetch_consensus(code, fye, as_of, r.store) if len(fye) == 4 else None
     r.consensus = cs
     notes: list[str] = ([fomc_err] if fomc_err else []) + peer_notes
+    # 联邦合同（OFFICIAL）：政府承包商有实质数据，其他公司为零也是信息。公司名取 SEC 登记名
+    gov_facts, gov_notes = _us_federal_contracts(sub_payload.get("name") or "", as_of, r.store)
+    for f in gov_facts:
+        r.ledger.put(f)
+    notes += gov_notes
     if cs is None:
         notes.append("一致预期不可用（FMP 免费档范围外、或分析时点早于今天而拿不到当时的预期）")
     else:
@@ -179,6 +185,18 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
         "、".join(d.publisher.split("（")[0] for d in peer_docs) or "无")
     prompt = C.consensus_prompt(cs) if cs is not None else ""
     return md, prompt, ("外部资料（" + "；".join(notes) + "）") if notes else ""
+
+
+def _us_federal_contracts(company: str, as_of: date, store) -> tuple[list, list[str]]:
+    """USAspending 近 12 个月联邦合同。公司名取不到不请求（按名称检索，空名会带出全表）。"""
+    from ir_agent.sources import usaspending
+
+    if not company.strip():
+        return [], ["USAspending 未查（SEC 登记的公司名取不到）"]
+    try:
+        return usaspending.fetch_contracts(company, as_of, store)
+    except Exception as e:                                  # noqa: BLE001
+        return [], [f"USAspending 联邦合同不可用（{e.__class__.__name__}）"]
 
 
 @functools.lru_cache(maxsize=32)
@@ -1500,7 +1518,7 @@ def _load_comps(code: str, r, as_of: date, snapshot_dir) -> tuple[str, str, str]
 
 
 # 挂在自己期间上（而非公司报告期）的事实前缀
-_CONTEXT_PREFIXES = ("macro.", "rate.", "beta")
+_CONTEXT_PREFIXES = ("macro.", "rate.", "beta", "gov.")
 
 _CN_TENOR = {2: "两", 5: "五", 10: "十", 30: "三十"}
 
