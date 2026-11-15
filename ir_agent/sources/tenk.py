@@ -161,3 +161,26 @@ def extract_sections(html: str, code: str = "", max_chars: int = MAX_EXCERPT) ->
         out.sections[key] = Section(key=key, label=SECTION_LABELS[key], heading=key, page=0,
                                     text=body[:max_chars], truncated=len(body) > max_chars)
     return out
+
+
+_SITE_CUE = re.compile(r"web\s?site|internet address|web address", re.I)
+_URLISH = re.compile(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?:/\S*)?", re.I)
+_NOT_COMPANY = ("sec.gov", "fasb.org", "xbrl.org", "edgar")
+
+
+def company_domain(text: str) -> str | None:
+    """10-K 里公司自报的官网（「Available Information」一句，如 Our website address is
+    www.palantir.com）→ 可注册域名 palantir.com。SEC submissions 的 website 字段实测为空（2026-11-15）。
+
+    只在提到 website / internet address 的句子附近找；sec.gov 等第三方网址跳过 —— 10-K 常写
+    「SEC 在 www.sec.gov 提供本公司报告」，那是别人的网站，判成公司披露就错了。"""
+    for cue in _SITE_CUE.finditer(text or ""):
+        window = text[cue.start():cue.end() + 200]
+        for m in _URLISH.finditer(window):
+            host = m.group(1).lower().rstrip(".")
+            if "." not in host or any(x in host for x in _NOT_COMPANY):
+                continue
+            if not (m.group(0).lower().startswith(("http", "www.")) or host.count(".") >= 2):
+                continue
+            return ".".join(host.split(".")[-2:])
+    return None

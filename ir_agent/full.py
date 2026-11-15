@@ -222,6 +222,23 @@ def _company_name(code: str) -> str:
     return me.name if me is not None else code
 
 
+BUSINESS_BRIEF = 800
+
+
+def _us_business(r) -> tuple[str, str | None]:
+    """美股开放网络检索用：10-K Item 1 业务的开头（≤ 800 字）与公司官网域名。取不到返回
+    ("", None)，不抛 —— 检索照样跑，只是少了方向。"""
+    from ir_agent.sources.tenk import company_domain
+
+    try:
+        sections, _ = _load_sections(r)
+        biz = sections.get("business") if sections is not None else None
+    except Exception:                                       # noqa: BLE001
+        return "", None
+    text = (biz.text if biz is not None else "") or ""
+    return text[:BUSINESS_BRIEF], company_domain(text)
+
+
 def _openweb_fallback(code: str) -> str:
     """开放网络一篇没取到时，外部依据还剩什么。美股没有券商研报（此前照抄 A 股措辞）。"""
     from ir_agent.market import is_us

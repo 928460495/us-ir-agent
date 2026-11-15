@@ -1010,7 +1010,7 @@ def _doc_id(final_url: str) -> str:
 
 
 def gather(client, *, code: str, company: str, industry: str,
-           as_of: date, corpus) -> OpenWebResult:
+           as_of: date, corpus, company_hosts: tuple[str, ...] = ()) -> OpenWebResult:
     """模型给网址 → 代码抓正文 → 入语料库。
 
     **调用方必须传入已显式开启 WebSearch/WebFetch 工具的 client**，
@@ -1095,7 +1095,10 @@ def gather(client, *, code: str, company: str, industry: str,
             title=cand.title,
             publisher=cand.publisher,
             # **按代码跟完重定向后的最终 URL 分级**，不是模型给的那个。
-            tier=tier_of_url(got.final_url),
+            # 本司官网（域名取自 10-K）判公司披露：公司新闻室的产品、合同公告是公司自述，
+            # 与 8-K 同级，不是媒体
+            tier=(Tier.COMPANY if any(_matches(_host_of(got.final_url), h) for h in company_hosts)
+                  else tier_of_url(got.final_url)),
             published=published,
             retrieved=as_of,
             text=got.text,
