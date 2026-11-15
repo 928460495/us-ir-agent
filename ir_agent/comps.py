@@ -192,6 +192,7 @@ class CompsTable:
             lines.append(
                 f"  ⚠ 样本混入不同报表模板（{kinds}）—— 以下指标失去可比性，"
                 f"不应横向比较：{names}")
+        lines.extend(_basis_note(keys))
         for e in self.excluded:
             lines.append(f"  ✗ 已排除 {e.name}({e.code}): {e.reason}")
         return "\n".join(lines)
@@ -266,9 +267,20 @@ class CompsTable:
             if miss:
                 bits.append("（部分同业缺该指标，未计入）")
             lines.append(f"  · {label(k):8} " + "　".join(bits))
+        lines.extend(_basis_note(keys))
         for e in self.excluded:
             lines.append(f"  ✗ 已排除 {e.name}: {e.reason}")
         return "\n".join(lines)
+
+
+def _basis_note(keys) -> list[str]:
+    """EV/EBITDA 的分母口径（用户 2026-11-15 选 A）。不写这一句，读者会把它与相对估值可比法
+    （最新 TTM）的倍数差当成数据错误 —— AAPL 实跑：同一批同业，这里的中位数是那边的两倍多，研报写
+    「原因待核」；DELL、HPE 处在 AI 服务器周期，最近四季 EBITDA 远高于上一财年。不含数字。"""
+    if "ev_ebitda" not in keys:
+        return []
+    return ["  注：EV/EBITDA 口径 —— 本表的 EBITDA 取报告期年报；相对估值的可比法取最新 TTM（滚动十二个月），"
+            "盈利变化快的行业两处倍数可以相差很大，不是数据错误"]
 
 
 def build_comps(

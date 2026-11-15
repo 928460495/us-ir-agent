@@ -366,6 +366,10 @@ class RelvalResult:
             lines.append(
                 f"    {LABEL[kind]}：倍数 [[{k}_mult_lo{at}]]／[[{k}_mult_mid{at}]]／"
                 f"[[{k}_mult_hi{at}]] → 每股 [[{k}_lo{at}]]／[[{k}_mid{at}]]／[[{k}_hi{at}]]")
+        if self.comps.get("ev_ebitda") is not None:
+            # 用户 2026-11-15 选 A：第一阶段可比表的 EV/EBITDA 是年报口径，这里是 TTM
+            lines.append("    注：本节 EV/EBITDA 用最新 TTM EBITDA，第一阶段可比表用报告期年报 EBITDA，"
+                         "口径不同，倍数不一致是正常的，不必当作数据错误")
         for note in self.comps_notes:
             lines.append(f"    {note}")
         lines.append("  回归调整（全行业横截面，P10–P90 预测区间）：")

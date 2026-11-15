@@ -377,3 +377,26 @@ def test_标签与量纲统一取自登记表():
     assert render("receivable_days", D("36.5")) == "36.5 天"
     assert render("roe", D("0.18")) == "18.00%"
     assert render("current_ratio", D("1.5")) == "1.50x"
+
+
+# ── EV/EBITDA 口径说明（用户 2026-11-15 选 A）：可比表取报告期年报，相对估值可比法取最新 TTM ──
+
+def _ev_rows(with_ev=True):
+    kw = (lambda v: {"ev_ebitda": D(v)}) if with_ev else (lambda v: {})
+    return [row("600519", "贵州茅台", pb=D("6.80"), **kw("20")),
+            row("000858", "五粮液", pb=D("2.33"), **kw("12")),
+            row("000568", "泸州老窖", pb=D("4.10"), **kw("15"))]
+
+
+def test_可比表注明EV_EBITDA是报告期年报口径():
+    from ir_agent.citation import audit_bare_numbers
+    t = build_comps("600519", _ev_rows(), period="2025FY", as_of=date(2026, 6, 1))
+    for text in (t.summary(), t.for_prompt()):
+        line = next(x for x in text.splitlines() if "口径" in x and "EV/EBITDA" in x)
+        assert "年报" in line and "TTM" in line
+    assert audit_bare_numbers(next(x for x in t.for_prompt().splitlines() if "TTM" in x)) == []
+
+
+def test_没有EV_EBITDA时不加口径说明():
+    t = build_comps("600519", _ev_rows(with_ev=False), period="2025FY", as_of=date(2026, 6, 1))
+    assert "TTM" not in t.summary() and "TTM" not in t.for_prompt()

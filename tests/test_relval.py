@@ -368,3 +368,12 @@ def test_净资产余额期与本司不同的同业在PB回归里标出():
     s[2].bs_basis = "2025FY"
     r = regress("pb_roe", s, _tgt(roe=D("0.2"), bs_basis="2026H1"), D(1))
     assert "2025FY" in r.flags.get("000002", "")
+
+
+def test_相对估值摘要说明EV_EBITDA用TTM与可比表年报口径不同():
+    """用户 2026-11-15 选 A：AAPL 研报把 10.36 倍与可比表 23.05 倍的差当成「原因待核」。"""
+    res = make_result()
+    assert res.comps.get("ev_ebitda") is not None
+    line = next(x for x in res.summary().splitlines() if "可比表" in x and "TTM" in x)
+    assert "年报" in line and audit_bare_numbers(line) == []
+    assert not any("可比表" in x and "TTM" in x for x in make_result(comps_missing=True).summary().splitlines())
