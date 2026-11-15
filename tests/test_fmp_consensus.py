@@ -122,11 +122,14 @@ def test_美股取不到一致预期时说明原因(monkeypatch, tmp_path):
 
 def test_后续阶段读回第一阶段的快照_不因隔天而失效(monkeypatch, tmp_path):
     # 审查 I2：门①签名后隔几天再跑第二次调用，as_of 不变，一致预期必须还在
+    # 快照的抓取时间是真实的「现在」，分析时点也必须取真实今天，否则这条测试会随日历过期
+    from datetime import timedelta
+    now = date.today()
     store = SnapshotStore(tmp_path)
     _fake(monkeypatch)
-    first = fmp.fetch_consensus("AAPL", "0927", TODAY, store, today=TODAY)
+    first = fmp.fetch_consensus("AAPL", "0927", now, store, today=now)
     monkeypatch.setattr(fmp.requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不该再请求")))
-    later = fmp.fetch_consensus("AAPL", "0927", TODAY, store, today=date(2026, 11, 5))
+    later = fmp.fetch_consensus("AAPL", "0927", now, store, today=now + timedelta(days=11))
     assert later is not None and later.eps == first.eps
 
 

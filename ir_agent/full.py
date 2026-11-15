@@ -222,6 +222,15 @@ def _company_name(code: str) -> str:
     return me.name if me is not None else code
 
 
+def _openweb_fallback(code: str) -> str:
+    """开放网络一篇没取到时，外部依据还剩什么。美股没有券商研报（此前照抄 A 股措辞）。"""
+    from ir_agent.market import is_us
+
+    if code and is_us(code):
+        return "定性判断的外部依据只剩公司披露（10-K、8-K、电话会纪要）、同业 10-K 与官方统计"
+    return "定性判断的外部依据仍只有券商研报一类来源"
+
+
 def _load_openweb(code: str, r, as_of: date, out: Path, client,
                   industry: str) -> list[str]:
     """开放网络文档入语料库。返回要记进产物清单的条目。
@@ -282,8 +291,7 @@ def _load_openweb(code: str, r, as_of: date, out: Path, client,
         if res.missing_slots:
             extra.append("缺失主题：" + "、".join(res.missing_slots))
         detail = "（" + "；".join(extra) + "）" if extra else ""
-        skipped.append(f"开放网络资料：一篇都没取到{detail}，"
-                       "定性判断的外部依据仍只有券商研报一类来源")
+        skipped.append(f"开放网络资料：一篇都没取到{detail}，{_openweb_fallback(code)}")
         return skipped
 
     return skipped + _openweb_notes(res)
@@ -462,7 +470,7 @@ def _restore_openweb(r, out: Path) -> list[str]:
         # 采到」独有的信号，损坏文件产生不出这个信号。
         if set(res.missing_slots) == set(openweb.SLOTS):
             return ["开放网络资料：第一阶段确实一篇都没采到（并非本次读取"
-                    "丢失），定性判断的外部依据仍只有券商研报一类来源"]
+                    f"丢失），{_openweb_fallback(getattr(r, 'code', '') or '')}"]
         return ["开放网络资料未跨阶段存活（落盘文件读不出文档，"
                 "可能已损坏或为空），外部引文可能核验不过"]
     # **第一阶段记下的缺口在这里同样要报。** 落盘文件里

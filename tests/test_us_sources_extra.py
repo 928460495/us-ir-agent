@@ -87,7 +87,9 @@ def test_FF49行业官方统计_四个试跑行业有序列_其他行业为空()
 
 
 def test_行业序列按当时版本取并入账(monkeypatch, tmp_path):
-    obs = [{"date": f"{y}-08-01", "value": v, "realtime_start": f"{y}-10-01", "realtime_end": "9999-12-31"}
+    # 版本终点与代码同一来源：写死 9999-12-31 会让这条测试在分析时点不再是「今天」时自己过期
+    end = fred._realtime_end(AS_OF)
+    obs = [{"date": f"{y}-08-01", "value": v, "realtime_start": f"{y}-10-01", "realtime_end": end}
            for y, v in ((2025, "100"), (2026, "110"))]
     monkeypatch.setattr(fred, "_observations", lambda sid, as_of, store: (obs, "fred_a34svs"))
     fs = fred.fetch_series_asof("A34SVS", AS_OF, SnapshotStore(tmp_path))
@@ -134,3 +136,10 @@ def test_开放网络不抓sec_gov_申报文件已由EDGAR入库(monkeypatch):
 def test_美股检索提示说明不要sec_gov申报与PDF(monkeypatch):
     p = _prompt_seen(monkeypatch, "AAPL")
     assert "sec.gov" in p and "PDF" in p
+
+
+def test_开放网络一篇没取到时_美股不说只剩券商研报():
+    from ir_agent import full
+    us, cn = full._openweb_fallback("PLTR"), full._openweb_fallback("600183")
+    assert "券商研报" not in us and "10-K" in us and "同业 10-K" in us
+    assert cn == "定性判断的外部依据仍只有券商研报一类来源"
