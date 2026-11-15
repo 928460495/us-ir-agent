@@ -1127,3 +1127,15 @@ def test_水平模式共用因子只采集一次():
                    "电子", AS_OF)
     assert list(data) == keys
     assert all(fd.status == DISCLOSED for fd in data.values())
+
+
+def test_NEWSWIRE语料不产生研报测算命中():
+    """终审 I3（2026-11-15）：通讯社文档在③与 MEDIA 同等跳过 —— 记者的预测不能以「研报测算」
+    身份直接支撑因子取值；通讯社事实走④的 verify_finding。"""
+    from ir_agent import gaps as G
+    corpus = Corpus(as_of=AS_OF)
+    corpus.add(_doc("我们测算行业稼动率将于下半年回升。", tier=Tier.NEWSWIRE))
+    assert G._match_report(corpus, "稼动率") is None
+    sell = Corpus(as_of=AS_OF)
+    sell.add(_doc("我们测算行业稼动率将于下半年回升。", tier=Tier.SELLSIDE))
+    assert G._match_report(sell, "稼动率") is not None          # 对照：闸门没把合格来源一并挡掉

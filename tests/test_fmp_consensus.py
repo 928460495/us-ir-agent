@@ -102,6 +102,7 @@ def test_美股外部资料取FMP一致预期不取东财研报(monkeypatch, tmp
     monkeypatch.setattr(C, "gather", lambda **k: (_ for _ in ()).throw(AssertionError("东财")))
     cs = fmp_c(monkeypatch, tmp_path)
     monkeypatch.setattr(fmp, "fetch_consensus", lambda t, fye, as_of, store: cs)
+    monkeypatch.setattr(full, "_us_federal_contracts", lambda *a: ([], []))   # 本条只测一致预期
     r = _run(tmp_path)
     md, pr, err = full._load_external("AAPL", r, TODAY)
     assert r.ledger.get("consensus.eps", "2027FY", as_of=TODAY).unit == "美元"

@@ -243,9 +243,12 @@ def _company_name(code: str) -> str:
 BUSINESS_BRIEF = 800
 
 
-def _us_business(r) -> tuple[str, str | None]:
+def _us_business(r, names: tuple[str, ...] = ()) -> tuple[str, str | None]:
     """美股开放网络检索用：10-K Item 1 业务的开头（≤ 800 字）与公司官网域名。取不到返回
-    ("", None)，不抛 —— 检索照样跑，只是少了方向。"""
+    ("", None)，不抛 —— 检索照样跑，只是少了方向。
+
+    域名从**未截断**的 Item 1 取（「Available Information」在末尾，截断后 PLTR 取不到）；
+    `names`（公司名、代码）给了就要求域名与之相关。"""
     from ir_agent.sources.tenk import company_domain
 
     try:
@@ -254,7 +257,8 @@ def _us_business(r) -> tuple[str, str | None]:
     except Exception:                                       # noqa: BLE001
         return "", None
     text = (biz.text if biz is not None else "") or ""
-    return text[:BUSINESS_BRIEF], company_domain(text)
+    whole = (getattr(sections, "full", None) or {}).get("business") or text
+    return text[:BUSINESS_BRIEF], company_domain(whole, names=names)
 
 
 def _openweb_fallback(code: str) -> str:
@@ -276,7 +280,7 @@ def _openweb_us_context(code: str, r) -> dict:
 
     if not (code and is_us(code)):
         return {}
-    business, domain = _us_business(r)
+    business, domain = _us_business(r, names=(_company_name(code), code))
     try:
         m = _re.match(r"FF49-(\d+)", r.peer_set.classification.used_path)
     except AttributeError:

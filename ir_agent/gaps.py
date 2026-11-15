@@ -342,7 +342,9 @@ def _match_report(corpus, label: str,
     # `test_候选词在外层容器在内层`。
     for core in _core_candidates(label, search_term):
         for d in corpus.docs:
-            if d.tier is Tier.MEDIA or d.channel == "peer_filing":
+            # 通讯社与媒体同等跳过（2026-11-15 终审）：记者的预测不能以「研报测算」身份直接
+            # 支撑因子取值；通讯社的已发生事实走④的 verify_finding
+            if d.tier in (Tier.MEDIA, Tier.NEWSWIRE) or d.channel == "peer_filing":
                 continue
             hit = _valid_hit(d.text, core)
             if hit is not None:

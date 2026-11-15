@@ -96,6 +96,9 @@ class SectionSet:
     missing: list[str] = field(default_factory=list)
     # 缺失的具体原因（如 10-K 的「以引用方式并入」）；没有就用通用说明
     notes: dict[str, str] = field(default_factory=dict)
+    # 未截断的章节正文（只有 10-K 路径填）。sections 里的 text 截到 max_chars 进提示词；官网域名
+    # 在 Item 1 末尾的「Available Information」，截断后取不到（2026-11-15 终审 I1，PLTR 实测）
+    full: dict[str, str] = field(default_factory=dict, repr=False)
 
     def get(self, key: str) -> Section | None:
         return self.sections.get(key)

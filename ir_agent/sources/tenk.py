@@ -160,15 +160,49 @@ def extract_sections(html: str, code: str = "", max_chars: int = MAX_EXCERPT) ->
         body = full[key]
         out.sections[key] = Section(key=key, label=SECTION_LABELS[key], heading=key, page=0,
                                     text=body[:max_chars], truncated=len(body) > max_chars)
+        out.full[key] = body
     return out
 
 
 _SITE_CUE = re.compile(r"web\s?site|internet address|web address", re.I)
 _URLISH = re.compile(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?:/\S*)?", re.I)
 _NOT_COMPANY = ("sec.gov", "fasb.org", "xbrl.org", "edgar")
+# 社交与内容平台：公司在上面有主页，但整个主机是别人的（Meta 10-K 全文第一个命中 facebook.com）
+_PLATFORMS = ("linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com", "youtube.com",
+              "medium.com", "github.com", "tiktok.com", "threads.net", "reddit.com", "wordpress.com",
+              "blogspot.com", "substack.com")
+_PUBLIC_TLDS = ("gov", "mil", "edu")
+_SECOND_LEVEL = {"co", "com", "net", "org", "ac", "gov", "edu", "or", "ne", "ltd", "plc"}
+_NAME_STOP = {"inc", "corp", "corporation", "co", "company", "ltd", "holdings", "plc", "the", "group",
+              "technologies", "technology", "platforms", "systems", "international", "global"}
 
 
-def company_domain(text: str) -> str | None:
+def _registrable(host: str) -> str:
+    """可注册域名。不引公共后缀库：ccTLD 下的二级后缀（co.uk、com.au、com.cn）取三段，其余两段。"""
+    parts = host.split(".")
+    if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in _SECOND_LEVEL:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _third_party(dom: str) -> bool:
+    from ir_agent.sources.openweb import _NEWSWIRE_HOSTS, _OFFICIAL_HOSTS, _matches
+
+    if dom.split(".")[-1] in _PUBLIC_TLDS or ".gov." in f".{dom}" or ".mil." in f".{dom}":
+        return True
+    return any(_matches(dom, h) or _matches(h, dom)
+               for h in _PLATFORMS + tuple(_OFFICIAL_HOSTS) + tuple(_NEWSWIRE_HOSTS))
+
+
+def _related(dom: str, names: tuple[str, ...]) -> bool:
+    """域名主体与公司名某个实词或代码有重合（atmeta 含 meta）。对不上宁可不认 —— 落在安全一侧。"""
+    label = dom.split(".")[0]
+    words = {w for n in names for w in re.split(r"[^a-z0-9]+", n.lower())
+             if len(w) >= 3 and w not in _NAME_STOP}
+    return any(w in label or label in w for w in words)
+
+
+def company_domain(text: str, names: tuple[str, ...] = ()) -> str | None:
     """10-K 里公司自报的官网（「Available Information」一句，如 Our website address is
     www.palantir.com）→ 可注册域名 palantir.com。SEC submissions 的 website 字段实测为空（2026-11-15）。
 
@@ -182,5 +216,11 @@ def company_domain(text: str) -> str | None:
                 continue
             if not (m.group(0).lower().startswith(("http", "www.")) or host.count(".") >= 2):
                 continue
-            return ".".join(host.split(".")[-2:])
+            dom = _registrable(host)
+            # 政府、通讯社、社交平台：别人的主机。判成公司披露，整个主机的页面都会被抬上去
+            if _third_party(dom):
+                continue
+            if names and not _related(dom, names):
+                continue
+            return dom
     return None

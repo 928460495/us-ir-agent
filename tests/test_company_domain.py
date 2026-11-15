@@ -68,3 +68,44 @@ def test_业务摘要截取800字并带出官网域名(monkeypatch):
     monkeypatch.setattr(full, "_load_sections", lambda r: (sec, ""))
     text, dom = full._us_business(SimpleNamespace())
     assert len(text) == 800 and text.startswith("Palantir builds software") and dom == "palantir.com"
+
+
+# ── 终审 I1 / I2（2026-11-15）──────────────────────────────────────
+
+def test_二级公共后缀取三段():
+    assert company_domain("Our website is www.acme.co.uk.") == "acme.co.uk"
+    assert company_domain("Our website is https://www.acme.com.au/investors") == "acme.com.au"
+
+
+def test_政府_通讯社_社交平台网址不当官网():
+    t = ("Information is available on the FDA website at www.fda.gov. We post updates on our blog "
+         "(www.medium.com/acme) and LinkedIn website www.linkedin.com/company/acme. "
+         "Reuters website www.reuters.com covered us. Our corporate website is www.acme.com.")
+    assert company_domain(t) == "acme.com"
+    assert company_domain("Our website www.facebook.com/acme and www.army.mil") is None
+
+
+def test_给公司名与代码时域名须与之相关():
+    t = "Our website address is www.palantir.com."
+    assert company_domain(t, names=("Palantir Technologies Inc.", "PLTR")) == "palantir.com"
+    assert company_domain("Our website is www.atmeta.com.", names=("Meta Platforms, Inc.", "META")) == "atmeta.com"
+    assert company_domain("Our website is www.somevendor.com.", names=("Acme Corp", "ACME")) is None
+
+
+def test_域名取自未截断的业务全文(monkeypatch):
+    """extract_sections 把 Item 1 截到 6000 字，Available Information 在末尾 —— PLTR 实测取不到。"""
+    from ir_agent import full
+    body = "Palantir builds software. " * 400 + "Our website address is www.palantir.com."
+    sec = SimpleNamespace(get=lambda k: SimpleNamespace(text=body[:6000]) if k == "business" else None,
+                          full={"business": body})
+    monkeypatch.setattr(full, "_load_sections", lambda r: (sec, ""))
+    text, dom = full._us_business(SimpleNamespace(), names=("Palantir Technologies Inc.", "PLTR"))
+    assert len(text) == 800 and dom == "palantir.com"
+
+
+def test_tenk章节保留未截断的全文():
+    from pathlib import Path
+    from ir_agent.sources import tenk
+    html = (Path(__file__).parent / "fixtures" / "edgar" / "aapl_10k_excerpt.htm").read_text(encoding="utf-8")
+    ss = tenk.extract_sections(html, "AAPL", max_chars=100)
+    assert len(ss.get("business").text) == 100 and len(ss.full["business"]) > 100

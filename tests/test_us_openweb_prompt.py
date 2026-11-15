@@ -103,7 +103,7 @@ def test_load_openweb美股分支传入业务摘要_监管机构与官网域名(
         got.update(kw)
         return openweb.OpenWebResult(missing_slots=list(US_SLOTS))
     monkeypatch.setattr(openweb, "gather", fake_gather)
-    monkeypatch.setattr(full, "_us_business", lambda r: ("Palantir builds software.", "palantir.com"))
+    monkeypatch.setattr(full, "_us_business", lambda r, names=(): ("Palantir builds software.", "palantir.com"))
     monkeypatch.setattr(full, "_company_name", lambda c: "Palantir")
     r = SimpleNamespace(corpus=None, peer_set=SimpleNamespace(
         classification=SimpleNamespace(used_path="FF49-36 Computer Software")))
