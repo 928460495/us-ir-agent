@@ -14,7 +14,7 @@ from ir_agent.sources.us_regulators import for_ff49
 AS_OF = date(2026, 11, 15)
 
 
-def _prompt(code, **kw):
+def _prompts(code, **kw):
     seen = []
 
     def client(p):
@@ -22,14 +22,32 @@ def _prompt(code, **kw):
         return ""
     openweb.gather(client, code=code, company="X", industry="Y", as_of=AS_OF,
                    corpus=Corpus(as_of=AS_OF), **kw)
-    return seen[0]
+    return seen
 
 
-def test_美股提示六个通用主题_不再有制造业措辞():
+def _prompt(code, **kw):
+    return _prompts(code, **kw)[0]
+
+
+def test_美股分主题检索_六个通用主题各一次再加一次行业追加():
+    """用户 2026-11-15 选 C：PLTR 实跑一次调用只给 5 个候选、两个主题一个都没有。"""
+    ps = _prompts("PLTR")
+    assert len(ps) == len(US_SLOTS) + 1
+    for t, p in zip(US_SLOTS, ps):
+        assert f"「{t}」" in p and f"最多 {openweb.US_CANDIDATES_PER_THEME} 个" in p
+        assert not any(f"「{o}」" in p for o in US_SLOTS if o != t)
+    extra = ps[-1]
+    assert all(t in extra for t in US_SLOTS) and "不要再给" in extra and "另起主题名" in extra
+    for p in ps:
+        assert "稼动率" not in p and "上下游价格与供需" not in p
+
+
+def test_美股提示点名抓不到的站点并要求先打开确认():
     p = _prompt("PLTR")
-    for t in US_SLOTS:
-        assert f"- {t}" in p
-    assert "稼动率" not in p and "上下游价格与供需" not in p and "最多 3 个" in p
+    for h in openweb.UNFETCHABLE_US:
+        assert h in p
+    assert "WebFetch" in p
+    assert "businesswire.com" in openweb.UNFETCHABLE_US and "gartner.com" in openweb.UNFETCHABLE_US
 
 
 def test_美股提示带业务摘要与监管机构_并要求避开付费墙():
@@ -116,3 +134,40 @@ def test_因子检索提示加通讯社与付费墙():
     from ir_agent.sources import conclusions, web
     for p in (web.PROMPT_US, conclusions.PROMPT_US):
         assert "Reuters" in p and "付费" in p
+
+
+def test_某个主题检索失败不拖垮其余主题_并记下来(monkeypatch):
+    monkeypatch.setattr(openweb, "fetch", lambda url, **k: openweb.Fetched(
+        final_url=url, text="body " + url, meta_published=date(2026, 10, 1)))
+
+    def client(p):
+        if "「竞争格局」" in p:
+            raise RuntimeError("cli boom")
+        t = next((t for t in US_SLOTS if f"「{t}」" in p), None)
+        return "" if t is None else f"候选: {t} | x | https://ok.example/{US_SLOTS.index(t)} | Pub | 2026-10-01"
+    res = openweb.gather(client, code="PLTR", company="X", industry="Y", as_of=AS_OF, corpus=Corpus(as_of=AS_OF))
+    assert len(res.docs) == 5 and "竞争格局" in res.missing_slots
+    assert len(res.search_failed) == 1 and "竞争格局" in res.search_failed[0] and "RuntimeError" in res.search_failed[0]
+    assert "竞争格局" in openweb.summary(res) and "检索调用失败" in openweb.summary(res)
+
+
+def test_全部检索调用都失败时照旧抛出():
+    import pytest
+
+    def client(p):
+        raise RuntimeError("login expired")
+    with pytest.raises(RuntimeError):
+        openweb.gather(client, code="PLTR", company="X", industry="Y", as_of=AS_OF, corpus=Corpus(as_of=AS_OF))
+
+
+def test_检索失败记录跨阶段存活并进产物清单(tmp_path):
+    from ir_agent import full
+    res = openweb.OpenWebResult(missing_slots=["竞争格局"], search_failed=["竞争格局：检索调用失败（RuntimeError）"])
+    openweb.save(res, tmp_path / "o.json")
+    back = openweb.load(tmp_path / "o.json", Corpus(as_of=AS_OF))
+    assert back.search_failed == res.search_failed
+    assert any("检索调用失败" in x for x in full._openweb_notes(back))
+
+
+def test_A股仍是一次调用():
+    assert len(_prompts("600183")) == 1

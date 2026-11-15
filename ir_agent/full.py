@@ -394,6 +394,8 @@ def _openweb_notes(res) -> list[str]:
     # 标成「未生成」就是在说没采到——而 docs 里明明有东西。
     # 见 `research._PREFIX` 的注释：这是同一个失败的第四次。
     lines: list[str] = ["开放网络资料采集："]
+    for note in getattr(res, "search_failed", []):
+        lines.append(f"  · {note}")
     if res.fetch_failed:
         # `fetch_failed` 曾经是个不透明的数字——「模型给了个 PDF」「模型
         # 给了个内网地址」「这个域名 DNS 解析不出来」「正文提取为空」

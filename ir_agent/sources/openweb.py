@@ -281,26 +281,25 @@ PROMPT = """为一份 A 股研究报告采集公司与行业的外部资料。
 # 美股版：独立模板（2026-11-15 起不再从 A 股 PROMPT 替换生成）。主题换成跨行业通用的六个，带上
 # 公司业务摘要与本行业监管机构，来源优先级加入通讯社。格式行与硬性要求（网址、日期、不填充）与 A 股
 # 逐字一致 —— 解析器只认这一种行格式。
-# 一手研究机构（Gartner、IDC 等）原站常拒绝程序访问（2026-10-26 AAPL、2026-11-15 PLTR 实测 403），
-# 同一份新闻稿通常也发在 Business Wire 等与公司新闻室 —— 那是正规转载，不是绕过拦截。
+#
+# **分主题检索**（用户 2026-11-15 选 C）：PLTR 实跑一次调用只给了 5 个候选（诊断重放 11 个），六个主题里
+# 两个一个都没有 —— 上限是允许，不是要求，模型一次回答能做的搜索有限。改为每个主题单独一次（多要几个
+# 备选，抓不到的跳过），外加一次行业追加主题。
+#
+# 抓不到的站点点名（不绕过拦截，只是别推荐死链接）：以下主机在 AAPL、NVDA、PLTR 实跑中返回 403。
+UNFETCHABLE_US: tuple[str, ...] = ("gartner.com", "businesswire.com", "finviz.com",
+                                   "constellationr.com", "semi.org")
+US_CANDIDATES_PER_THEME = 5
+US_EXTRA_THEMES = 2
+US_EXTRA_PER_THEME = 3
+
 PROMPT_US = """为一份美股研究报告采集公司与行业的外部资料。
 
 公司：{company}（{code}）
 行业：{industry}
 {business_block}
-上网搜索，为下面每个主题各找**最多 {per_slot} 个**具体网页。
+{task_block}
 只给网址，不要摘抄正文——正文由我们自己抓取。
-
-必找的主题：
-- 需求与规模
-- 竞争格局
-- 价格与成本
-- 政策监管与诉讼
-- 客户与合同
-- 公司重大动态
-
-若这个行业还有别的关键外部资料（例如药品审批、利率与存贷利差、油价与产量、政府预算、
-订阅续费率），可另起主题名追加。
 
 每条一行：
 
@@ -316,16 +315,38 @@ PROMPT_US = """为一份美股研究报告采集公司与行业的外部资料�
   1. 美国政府统计与监管部门的原始页面（Census、BEA、BLS、EIA、FDA、FAA、FCC、FTC、DOJ、
      联邦公报 Federal Register 等）{regulators_block}
   2. 行业协会、一手研究机构与公司的公开新闻稿；原站拒绝访问时，给同一份新闻稿在
-     Business Wire、PR Newswire、GlobeNewswire 或该机构 / 公司新闻室的转载页，发布机构仍写原机构
+     PR Newswire、GlobeNewswire 或该机构 / 公司新闻室的转载页，发布机构仍写原机构
   3. 通讯社（Reuters、AP、AFP、Bloomberg、WSJ、FT、CNBC）对已发生事实的报道
   4. 其他媒体
-- 不要给需要登录或付费才能看的页面；Gartner、Forrester、IDC 等的报告给其新闻稿的正规转载页。
+- 下列站点实测拒绝程序访问，不要给（含 Business Wire）：{unfetchable}。
+- 每个网址先用 WebFetch 打开，确认能读到正文再给出；打不开、要登录或付费才能看的不要给。
+  Gartner、Forrester、IDC 等的报告给其新闻稿的正规转载页。
 - 不要给 sec.gov 上的申报文件（10-K、10-Q、8-K 已由 EDGAR 直接入库）。
 - 只给 HTML 网页，不要 PDF（抓不了）；联邦公报等有网页版的给网页版。
-- 找不到的主题就不要输出该主题的行，**不要用推测或不相关的网页填充**。
+- 找不到就不要输出，**不要用推测或不相关的网页填充**。
 
 只输出上述格式的行。
 """
+
+_US_THEME_TASK = """上网搜索，为主题「{theme}」找**最多 {per_slot} 个**具体网页。多给几个备选：我们逐个抓取，
+抓不到的跳过，这个主题最多留 {keep} 篇。主题名一律写「{theme}」。"""
+
+_US_EXTRA_TASK = """下面六个通用主题已另行检索，这里**不要再给**：{done}。
+这个行业若还有别的关键外部资料（例如药品审批、利率与存贷利差、油价与产量、政府预算、
+订阅续费率），另起主题名，最多 {n_themes} 个主题、每个主题最多 {per_slot} 个网页。没有就不输出。"""
+
+
+def us_prompts(*, company: str, code: str, industry: str, as_of: date, business: str = "",
+               regulators: str = "") -> list[tuple[str, str]]:
+    """美股的全部检索提示：[(主题或「追加」, 提示词)]，六个通用主题各一条，最后一条要行业追加主题。"""
+    common = dict(company=company or code, code=code, industry=industry or "未知", as_of=as_of.isoformat(),
+                  unfetchable="、".join(UNFETCHABLE_US), **_us_prompt_blocks(business, regulators))
+    out = [(t, PROMPT_US.format(task_block=_US_THEME_TASK.format(
+                theme=t, per_slot=US_CANDIDATES_PER_THEME, keep=PER_SLOT_US), **common))
+           for t in US_SLOTS]
+    out.append(("追加", PROMPT_US.format(task_block=_US_EXTRA_TASK.format(
+        done="、".join(US_SLOTS), n_themes=US_EXTRA_THEMES, per_slot=US_EXTRA_PER_THEME), **common)))
+    return out
 
 
 def _us_prompt_blocks(business: str, regulators: str) -> dict[str, str]:
@@ -1056,6 +1077,9 @@ class OpenWebResult:
     # 不是把 URL 直接丢掉：读者除了「这是哪一种失败」，往往还想知道
     # 「至少举一个例子，我该去查哪个网址」，完全抹掉 URL 是过度归并。
     fetch_failed_reasons: list[str] = field(default_factory=list)
+    # 美股分主题检索时，某个主题的模型调用失败（「竞争格局：检索调用失败（ClaudeCliError）」）。
+    # 不拖垮其余主题，但必须说出来 —— 否则这个主题只会显示成「未取到」，看不出是没搜还是没搜到。
+    search_failed: list[str] = field(default_factory=list)
     # 发布日期由模型给出、未经代码核验的篇数。**必须能说出来** ——
     # 用户决定信模型报的日期，折中是把不可核验的那部分显式标出来，
     # 而不是让它隐身在一堆看起来一样的引用里。
@@ -1076,6 +1100,22 @@ def _doc_id(final_url: str) -> str:
     return "ow_" + hashlib.sha256(final_url.encode("utf-8")).hexdigest()[:12]
 
 
+def _search_us(client, res: OpenWebResult, **kw) -> str:
+    """逐主题调模型，拼起来交给同一个解析器。单个主题失败记进 `res.search_failed`、继续；
+    全部失败照旧抛出（登录过期这类全局故障不能伪装成「一篇没取到」）。"""
+    parts: list[str] = []
+    errors: list[Exception] = []
+    for theme, prompt in us_prompts(**kw):
+        try:
+            parts.append(client(prompt))
+        except Exception as e:                              # noqa: BLE001
+            errors.append(e)
+            res.search_failed.append(f"{theme}：检索调用失败（{e.__class__.__name__}: {str(e)[:80]}）")
+    if errors and not parts:
+        raise errors[0]
+    return "\n".join(parts)
+
+
 def gather(client, *, code: str, company: str, industry: str,
            as_of: date, corpus, business: str = "", regulators: str = "",
            company_hosts: tuple[str, ...] = ()) -> OpenWebResult:
@@ -1090,11 +1130,13 @@ def gather(client, *, code: str, company: str, industry: str,
     us = bool(code) and is_us(code)
     slots = slots_for(code)
     per_slot_cap, max_docs = (PER_SLOT_US, MAX_DOCS_US) if us else (PER_SLOT, MAX_DOCS)
-    common = dict(company=company or code, code=code, industry=industry or "未知",
-                  per_slot=per_slot_cap, as_of=as_of.isoformat())
     res = OpenWebResult()
-    raw = client(PROMPT_US.format(**common, **_us_prompt_blocks(business, regulators)) if us
-                 else PROMPT.format(**common))
+    if us:
+        raw = _search_us(client, res, company=company, code=code, industry=industry, as_of=as_of,
+                         business=business, regulators=regulators)
+    else:
+        raw = client(PROMPT.format(company=company or code, code=code, industry=industry or "未知",
+                                   per_slot=per_slot_cap, as_of=as_of.isoformat()))
     seen = {d.url for d in corpus.docs}
     per_slot: dict[str, int] = {}
     # 去重键集合：存的是去掉 URL 前缀之后的诊断部分，不是完整消息——
@@ -1205,6 +1247,8 @@ def summary(res: OpenWebResult) -> str:
         lines.append(f"  ⚠ 其中 {res.host_check_degraded} 篇入库时主机安全"
                      "校验降级（本机 DNS 被代理劫持，IP 层校验无从进行）"
                      "——内网地址拦截本轮依赖代理侧")
+    for note in res.search_failed:
+        lines.append(f"  ⚠ {note}")
     if res.fetch_failed:
         lines.append(f"  – {res.fetch_failed} 篇抓取失败")
         # 去重后的原因逐条列出——不然「10 篇抓取失败」在 DNS 解析不出
@@ -1328,6 +1372,7 @@ def save(res: OpenWebResult, path: Path | str) -> None:
         "fetch_failed_reasons": res.fetch_failed_reasons,
         "model_dated": res.model_dated,
         "host_check_degraded": res.host_check_degraded,
+        "search_failed": res.search_failed,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -1369,7 +1414,8 @@ def load(path: Path | str, corpus) -> OpenWebResult:
             fetch_failed=int(raw.get("fetch_failed", 0)),
             fetch_failed_reasons=_str_list_field(raw, "fetch_failed_reasons"),
             model_dated=int(raw.get("model_dated", 0)),
-            host_check_degraded=int(raw.get("host_check_degraded", 0)))
+            host_check_degraded=int(raw.get("host_check_degraded", 0)),
+            search_failed=_str_list_field(raw, "search_failed"))
         docs_raw = list(raw.get("docs", []))
     except Exception:                                       # noqa: BLE001
         # 顶层不是 dict（没有 .get）、docs 不是可迭代对象、或
