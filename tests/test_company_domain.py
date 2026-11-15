@@ -27,14 +27,14 @@ def test_不把SEC与第三方网址当官网():
     assert company_domain("no web address mentioned here at all") is None
 
 
-def _gather(monkeypatch, company_hosts):
+def _gather(monkeypatch, company_hosts, url="https://www.palantir.com/newsroom/aip"):
     from ir_agent.sources import openweb
 
     def fake_fetch(url, **k):
         return openweb.Fetched(final_url=url, text="Palantir announced a new AIP release.",
                                meta_published=date(2026, 10, 1))
     monkeypatch.setattr(openweb, "fetch", fake_fetch)
-    line = "候选: 公司重大动态 | AIP 发布 | https://www.palantir.com/newsroom/aip | Palantir | 2026-10-01"
+    line = f"候选: 公司重大动态 | AIP 发布 | {url} | Palantir | 2026-10-01"
     corpus = Corpus(as_of=AS_OF)
     openweb.gather(lambda p: line, code="PLTR", company="Palantir", industry="x", as_of=AS_OF,
                    corpus=corpus, company_hosts=company_hosts)
@@ -47,6 +47,12 @@ def test_公司自有域名下的页面判公司披露(monkeypatch):
 
 def test_没有官网域名时照旧按网址分级(monkeypatch):
     assert _gather(monkeypatch, ()).tier is Tier.MEDIA
+
+
+def test_模型把发布机构写成本司_别人的网址仍按网址分级(monkeypatch):
+    """COMPANY 只跟最终网址的主机走；模型在机构名一栏写本司名拔不上去。"""
+    assert _gather(monkeypatch, ("palantir.com",), "https://finviz.com/news/x").tier is Tier.MEDIA
+    assert _gather(monkeypatch, ("palantir.com",), "https://palantir.com.evil.io/x").tier is Tier.MEDIA
 
 
 def test_10K取不到时业务摘要为空且不抛(monkeypatch):

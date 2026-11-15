@@ -248,6 +248,26 @@ def _openweb_fallback(code: str) -> str:
     return "定性判断的外部依据仍只有券商研报一类来源"
 
 
+def _openweb_us_context(code: str, r) -> dict:
+    """美股检索的方向：10-K 业务摘要、本行业监管机构、本司官网域名。A 股返回空（检索提示逐字不变）。
+    任何一项取不到都只是少给一段，不抛。"""
+    import re as _re
+
+    from ir_agent.market import is_us
+    from ir_agent.sources import us_regulators
+
+    if not (code and is_us(code)):
+        return {}
+    business, domain = _us_business(r)
+    try:
+        m = _re.match(r"FF49-(\d+)", r.peer_set.classification.used_path)
+    except AttributeError:
+        m = None
+    return {"business": business,
+            "regulators": us_regulators.render(int(m.group(1)) if m else None),
+            "company_hosts": (domain,) if domain else ()}
+
+
 def _load_openweb(code: str, r, as_of: date, out: Path, client,
                   industry: str) -> list[str]:
     """开放网络文档入语料库。返回要记进产物清单的条目。
@@ -270,9 +290,10 @@ def _load_openweb(code: str, r, as_of: date, out: Path, client,
 
     if r.corpus is None:
         r.corpus = Corpus(as_of=as_of)
+    extra = _openweb_us_context(code, r)
     try:
         res = openweb.gather(client, code=code, company=_company_name(code),
-                             industry=industry, as_of=as_of, corpus=r.corpus)
+                             industry=industry, as_of=as_of, corpus=r.corpus, **extra)
     except Exception as e:                                  # noqa: BLE001
         return [f"开放网络采集未执行（{e.__class__.__name__}: {str(e)[:120]}）"]
 
@@ -485,7 +506,7 @@ def _restore_openweb(r, out: Path) -> list[str]:
         # 空列表——不会凑巧等于 SLOTS 全集。因此
         # `set(missing_slots) == set(SLOTS)` 是「第一阶段真的什么都没
         # 采到」独有的信号，损坏文件产生不出这个信号。
-        if set(res.missing_slots) == set(openweb.SLOTS):
+        if set(res.missing_slots) == set(openweb.slots_for(getattr(r, "code", "") or "")):
             return ["开放网络资料：第一阶段确实一篇都没采到（并非本次读取"
                     f"丢失），{_openweb_fallback(getattr(r, 'code', '') or '')}"]
         return ["开放网络资料未跨阶段存活（落盘文件读不出文档，"

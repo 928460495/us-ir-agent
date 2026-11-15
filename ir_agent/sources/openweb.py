@@ -181,6 +181,24 @@ SLOTS: tuple[str, ...] = (
     "公司重大动态",
 )
 
+# 美股：一套跨行业通用主题（用户 2026-11-15 决定），模型可按行业追加。A 股 SLOTS 是制造业口径
+# （上下游价格、稼动率），套在软件、银行、医药上主题本身就是错的 —— PLTR 首跑一篇没取到的起因之一。
+US_SLOTS: tuple[str, ...] = (
+    "需求与规模",
+    "竞争格局",
+    "价格与成本",
+    "政策监管与诉讼",
+    "客户与合同",
+    "公司重大动态",
+)
+
+
+def slots_for(code: str) -> tuple[str, ...]:
+    """该市场的固定槽位。缺口判定（含第二阶段读回）必须按这一份，不能一律用 A 股 SLOTS。"""
+    from ir_agent.market import is_us
+
+    return US_SLOTS if code and is_us(code) else SLOTS
+
 _LINE = keyed("候选")
 _URL = re.compile(r"https?://\S+")
 
@@ -197,7 +215,7 @@ class Candidate:
     extra: bool          # 槽位不在 SLOTS 里 → 额外发现，不参与缺口判定
 
 
-def parse_candidates(text: str) -> list[Candidate]:
+def parse_candidates(text: str, slots: tuple[str, ...] = SLOTS) -> list[Candidate]:
     """解析 `候选:` 行。三道守卫与 web.parse_findings 逐条对齐。"""
     out: list[Candidate] = []
     for hit in _LINE.finditer(text):
@@ -221,7 +239,7 @@ def parse_candidates(text: str) -> list[Candidate]:
         slot = parts[0]
         out.append(Candidate(slot=slot, title=parts[1], url=url_m.group(0),
                              publisher=parts[3], published=when,
-                             extra=slot not in SLOTS))
+                             extra=slot not in slots))
     return out
 
 
@@ -260,17 +278,63 @@ PROMPT = """为一份 A 股研究报告采集公司与行业的外部资料。
 """
 
 
-# 美股版：来源优先级换成美国官方统计；一手研究机构（Gartner、IDC 等）原站常拒绝程序访问
-# （2026-10-26 AAPL 实测 403），同一份新闻稿通常也发在通讯社与公司新闻室 —— 那是正规转载，
-# 不是绕过拦截。其余格式与硬性要求与 A 股版逐字一致（解析器只认这一种行格式）。
-PROMPT_US = PROMPT.replace("为一份 A 股研究报告", "为一份美股研究报告").replace(
-    "- 优先统计局、部委、行业协会、一手市场研究机构的原始页面，其次财经媒体。",
-    "- 优先美国政府统计（Census、BEA、BLS、EIA 等）、监管机构、行业协会、一手市场研究机构的\n"
-    "  原始页面，其次财经媒体。\n"
-    "- 一手机构的新闻稿若原站拒绝访问，改给同一份新闻稿在 Business Wire、PR Newswire、\n"
-    "  GlobeNewswire 或该机构 / 公司新闻室的转载页；发布机构仍写原机构。\n"
-    "- 不要给 sec.gov 上的申报文件（10-K、10-Q、8-K 已由 EDGAR 直接入库）。\n"
-    "- 只给 HTML 网页，不要 PDF（抓不了）；联邦公报等有网页版的给网页版。")
+# 美股版：独立模板（2026-11-15 起不再从 A 股 PROMPT 替换生成）。主题换成跨行业通用的六个，带上
+# 公司业务摘要与本行业监管机构，来源优先级加入通讯社。格式行与硬性要求（网址、日期、不填充）与 A 股
+# 逐字一致 —— 解析器只认这一种行格式。
+# 一手研究机构（Gartner、IDC 等）原站常拒绝程序访问（2026-10-26 AAPL、2026-11-15 PLTR 实测 403），
+# 同一份新闻稿通常也发在 Business Wire 等与公司新闻室 —— 那是正规转载，不是绕过拦截。
+PROMPT_US = """为一份美股研究报告采集公司与行业的外部资料。
+
+公司：{company}（{code}）
+行业：{industry}
+{business_block}
+上网搜索，为下面每个主题各找**最多 {per_slot} 个**具体网页。
+只给网址，不要摘抄正文——正文由我们自己抓取。
+
+必找的主题：
+- 需求与规模
+- 竞争格局
+- 价格与成本
+- 政策监管与诉讼
+- 客户与合同
+- 公司重大动态
+
+若这个行业还有别的关键外部资料（例如药品审批、利率与存贷利差、油价与产量、政府预算、
+订阅续费率），可另起主题名追加。
+
+每条一行：
+
+`候选: <主题> | <网页标题> | <网址> | <发布机构> | <发布日期 YYYY-MM-DD>`
+
+**硬性要求**
+- **必须给出网址**。没有网址的条目会被直接丢弃 —— 无从复核的转述与凭空
+  捏造无异。
+- **必须给出发布日期（YYYY-MM-DD）**。没写日期、或只写到「2026年7月」
+  这种月份粒度以致解析不出来的条目，同样会被直接丢弃。晚于 {as_of} 的
+  会被剔除：拿未来的资料分析过去，与账本的时点守卫是同一件事。
+- 来源优先级由高到低：
+  1. 美国政府统计与监管部门的原始页面（Census、BEA、BLS、EIA、FDA、FAA、FCC、FTC、DOJ、
+     联邦公报 Federal Register 等）{regulators_block}
+  2. 行业协会、一手研究机构与公司的公开新闻稿；原站拒绝访问时，给同一份新闻稿在
+     Business Wire、PR Newswire、GlobeNewswire 或该机构 / 公司新闻室的转载页，发布机构仍写原机构
+  3. 通讯社（Reuters、AP、AFP、Bloomberg、WSJ、FT、CNBC）对已发生事实的报道
+  4. 其他媒体
+- 不要给需要登录或付费才能看的页面；Gartner、Forrester、IDC 等的报告给其新闻稿的正规转载页。
+- 不要给 sec.gov 上的申报文件（10-K、10-Q、8-K 已由 EDGAR 直接入库）。
+- 只给 HTML 网页，不要 PDF（抓不了）；联邦公报等有网页版的给网页版。
+- 找不到的主题就不要输出该主题的行，**不要用推测或不相关的网页填充**。
+
+只输出上述格式的行。
+"""
+
+
+def _us_prompt_blocks(business: str, regulators: str) -> dict[str, str]:
+    """业务摘要、监管机构两段；为空时整段省略（不留「公司业务：」空标题让模型去猜）。"""
+    biz = business.strip()
+    return {
+        "business_block": (f"\n公司业务（10-K Item 1 开头，供确定检索方向）：\n{biz}\n" if biz else ""),
+        "regulators_block": (f"\n     本行业监管机构官网：{regulators.strip()}" if regulators.strip() else ""),
+    }
 
 
 # ── 抓取与正文提取 ──────────────────────────────────────────────
@@ -948,6 +1012,9 @@ def fetch(url: str, *, timeout: int = TIMEOUT) -> Fetched:
 
 PER_SLOT = 2
 MAX_DOCS = 10
+# 美股：每主题 3 篇、合计 20 篇（用户 2026-11-15 决定）。一手研报不可得，主题更多、篇幅更宽。
+PER_SLOT_US = 3
+MAX_DOCS_US = 20
 # `fetch_failed_reasons` 里单条原因的截断长度。原因字符串里带着完整
 # URL（见 fetch()/`_reject_unsafe_host` 里的 `f"{url}：..."` 格式），
 # 加上异常自带的描述可能很长；与 full.py 里 `str(e)[:120]` 同一量级，
@@ -1010,7 +1077,8 @@ def _doc_id(final_url: str) -> str:
 
 
 def gather(client, *, code: str, company: str, industry: str,
-           as_of: date, corpus, company_hosts: tuple[str, ...] = ()) -> OpenWebResult:
+           as_of: date, corpus, business: str = "", regulators: str = "",
+           company_hosts: tuple[str, ...] = ()) -> OpenWebResult:
     """模型给网址 → 代码抓正文 → 入语料库。
 
     **调用方必须传入已显式开启 WebSearch/WebFetch 工具的 client**，
@@ -1019,25 +1087,29 @@ def gather(client, *, code: str, company: str, industry: str,
     """
     from ir_agent.market import is_us
 
+    us = bool(code) and is_us(code)
+    slots = slots_for(code)
+    per_slot_cap, max_docs = (PER_SLOT_US, MAX_DOCS_US) if us else (PER_SLOT, MAX_DOCS)
+    common = dict(company=company or code, code=code, industry=industry or "未知",
+                  per_slot=per_slot_cap, as_of=as_of.isoformat())
     res = OpenWebResult()
-    raw = client((PROMPT_US if is_us(code) else PROMPT).format(company=company or code, code=code,
-                               industry=industry or "未知",
-                               per_slot=PER_SLOT, as_of=as_of.isoformat()))
+    raw = client(PROMPT_US.format(**common, **_us_prompt_blocks(business, regulators)) if us
+                 else PROMPT.format(**common))
     seen = {d.url for d in corpus.docs}
     per_slot: dict[str, int] = {}
     # 去重键集合：存的是去掉 URL 前缀之后的诊断部分，不是完整消息——
     # 见 `OpenWebResult.fetch_failed_reasons` 字段注释。
     seen_diagnoses: set[str] = set()
 
-    for cand in parse_candidates(raw):
-        if len(res.docs) >= MAX_DOCS:
+    for cand in parse_candidates(raw, slots):
+        if len(res.docs) >= max_docs:
             break
         if cand.published > as_of:
             # 时点守卫的第一道：候选阶段就挡，省一次网络请求。
             # 第二道在 corpus.add_if_visible 里（按最终文档再滤一遍）。
             corpus.skipped.append(f"{cand.title}（{cand.published}）")
             continue
-        if per_slot.get(cand.slot, 0) >= PER_SLOT:
+        if per_slot.get(cand.slot, 0) >= per_slot_cap:
             continue
         if cand.url in seen:
             continue
@@ -1116,7 +1188,7 @@ def gather(client, *, code: str, company: str, industry: str,
             res.extra_slots.append(cand.slot)
 
     # 缺口只按固定槽位判定 —— 额外槽位是模型的自由发挥，不能进缺口口径。
-    res.missing_slots = [s for s in SLOTS if not per_slot.get(s)]
+    res.missing_slots = [s for s in slots if not per_slot.get(s)]
     return res
 
 

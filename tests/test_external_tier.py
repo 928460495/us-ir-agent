@@ -210,7 +210,14 @@ def test_结构哨兵_openweb模块任何函数都不得访问TierCOMPANY属性(
     """
     from ir_agent.sources import openweb
 
+    # 唯一豁免：`gather` 按调用方传入的 company_hosts 赋 COMPANY（美股公司新闻室，用户
+    # 2026-11-15 决定）。域名来自代码亲手取回的 10-K「Available Information」一句，不来自
+    # 模型，也不是 openweb.py 里的写死名单 —— 「分级跟着取回方式走」不变。模型自报机构名
+    # 拔不到 COMPANY，由 test_company_domain 的行为测试守。
+    exempt = {"gather"}
     for fn in _defined_functions(openweb):
+        if fn.__qualname__ in exempt:
+            continue
         names = _co_names_deep(fn.__code__)
         assert "COMPANY" not in names, (
             f"{fn.__qualname__} 的字节码里出现了 COMPANY —— "

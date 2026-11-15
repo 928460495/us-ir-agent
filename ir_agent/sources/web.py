@@ -474,6 +474,9 @@ US_SOURCE_RULES = """
 - 优先美国政府统计（Census、BEA、BLS、EIA、美联储等）与一手研究机构（IDC、Gartner、
   Counterpoint、TrendForce 等）的原始页面；一手机构新闻稿原站拒绝访问时，给同一份新闻稿在
   Business Wire、PR Newswire、GlobeNewswire 或该机构新闻室的转载页，发布机构仍写原机构。
+- 其次是通讯社（Reuters、AP、AFP、Bloomberg、WSJ、FT、CNBC）对已发生事实的报道，发布机构写通讯社
+  全称；再次才是其他媒体。
+- 不要给需要登录或付费才能看的页面。
 - 不要给 sec.gov 上的申报文件（10-K、10-Q、8-K 已由 EDGAR 直接入库）。
 - 只给 HTML 网页，不要 PDF（抓不了）。"""
 PROMPT_US = PROMPT.replace("为一份 A 股研究报告", "为一份美股研究报告").replace(
