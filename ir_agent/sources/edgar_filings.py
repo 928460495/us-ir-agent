@@ -3,7 +3,9 @@
 交出 `announce.AnnounceResult`，落盘与读回沿用 A 股公告的 `announce.save/load`。
 
 按 8-K 的 item 分档（只排序，不影响引用与核验）:
-  - 2.02 业绩发布：正文在附件 EX-99.1（新闻稿），主文档只有一句「见附件」；
+  - 2.02 业绩发布：正文在附件 EX-99.1（新闻稿），主文档只有一句「见附件」；同一份 8-K 的
+    EX-99.2 起（投资者演示、补充数据）各成一篇，rank 2（2026-11-15 加）；
+  - 5.02 高管或董事变动：取主文档（2026-11-15 加）；
   - 1.01 / 2.01 等实质事项：取主文档正文；
   - 其余（5.07 投票结果、9.01 单独的附件说明等）：程序性，排除并计数。
 """
@@ -25,6 +27,7 @@ EARNINGS = "2.02"
 ITEM_NAMES = {
     "2.02": "业绩发布", "1.01": "重大协议", "2.01": "资产收购或处置", "2.03": "直接财务义务",
     "2.05": "退出或处置成本", "2.06": "重大减值", "8.01": "其他事项",
+    "5.02": "高管或董事变动",
 }
 TIER_ONE = {"2.02", "1.01", "2.01"}
 _ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S | re.I)
@@ -54,6 +57,16 @@ def _earnings_url(index_html: str) -> str | None:
     return next((url for kind, url in ex if kind.startswith("EX-99")), None)
 
 
+def _other_exhibits(index_html: str, main_url: str) -> list[tuple[str, str]]:
+    """业绩 8-K 里主新闻稿以外的 EX-99 附件（按索引页顺序，同一地址只取一次）。"""
+    out, seen = [], {main_url}
+    for kind, url in _exhibits(index_html):
+        if kind.startswith("EX-99") and url not in seen:
+            seen.add(url)
+            out.append((kind, url))
+    return out
+
+
 def gather_us(*, sub: dict, as_of: date, corpus, store, company: str,
               months: int = 12) -> AnnounceResult:
     res = AnnounceResult()
@@ -74,6 +87,7 @@ def gather_us(*, sub: dict, as_of: date, corpus, store, company: str,
             continue
         acc = r["accessionNumber"][i]
         base = ARCHIVE.format(cik=cik, acc=acc.replace("-", ""))
+        idx = None
         try:
             if picked == EARNINGS:
                 idx, _ = edgar.get_text(f"{base}/{acc}-index.htm", {}, "sec_8k_index", store)
@@ -98,4 +112,28 @@ def gather_us(*, sub: dict, as_of: date, corpus, store, company: str,
         if corpus.add_if_visible(doc):
             res.docs.append(doc)
             res.picked += 1
+        if idx is not None:
+            _add_exhibits(res, idx, url, acc=acc, filed=filed, as_of=as_of, corpus=corpus,
+                          store=store, company=company)
     return res
+
+
+def _add_exhibits(res: AnnounceResult, idx: str, main_url: str, *, acc: str, filed: date,
+                  as_of: date, corpus, store, company: str) -> None:
+    """业绩附件逐个入库。单个附件取失败只记说明 —— 主新闻稿已经入库，不受影响。"""
+    for kind, url in _other_exhibits(idx, main_url):
+        try:
+            html, _ = edgar.get_text(url, {}, "sec_8k_doc", store)
+        except edgar.SecIdentityMissing:
+            raise
+        except Exception as e:                               # noqa: BLE001
+            res.fetch_failed += 1
+            res.fetch_failed_reasons.append(f"8-K {acc}（{filed}）附件 {kind}：{e.__class__.__name__}")
+            continue
+        doc = Document(doc_id=f"sec8k_{acc}_{kind}", url=url, publisher=company, tier=Tier.COMPANY,
+                       title=f"8-K 业绩附件 {kind}（{filed.isoformat()}）",
+                       published=filed, retrieved=as_of, text=html_text(html),
+                       prompt_limit=PROMPT_LIMIT, rank=2)
+        if corpus.add_if_visible(doc):
+            res.docs.append(doc)
+            res.picked += 1
