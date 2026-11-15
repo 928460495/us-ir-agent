@@ -174,7 +174,10 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     gov_facts, gov_notes = _us_federal_contracts(sub_payload.get("name") or "", as_of, r.store)
     for f in gov_facts:
         r.ledger.put(f)
-    notes += gov_notes
+    # 入了账的说明是资料摘要，不是缺口；没入账的才进失败串（PLTR 实跑：成功的金额被渲染成「未生成」）
+    gov_md = gov_notes if gov_facts else []
+    if not gov_facts:
+        notes += gov_notes
     if cs is None:
         notes.append("一致预期不可用（FMP 免费档范围外、或分析时点早于今天而拿不到当时的预期）")
     else:
@@ -183,6 +186,8 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     md = C.consensus_md(cs) if cs is not None else "一致预期：不可用"
     md += f"\n同业 10-K 入语料库 {len(peer_docs)} 份（COMPANY 级，竞争对手自述）：" + (
         "、".join(d.publisher.split("（")[0] for d in peer_docs) or "无")
+    for line in gov_md:
+        md += "\n" + line
     prompt = C.consensus_prompt(cs) if cs is not None else ""
     return md, prompt, ("外部资料（" + "；".join(notes) + "）") if notes else ""
 

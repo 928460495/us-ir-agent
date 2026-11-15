@@ -164,8 +164,8 @@ def test_外部资料加载器写入联邦合同_公司名取不到时不请求(
     def run(payload):
         sub = store.save(source="sec_submissions", payload=payload, url="u", fetched_at=datetime.now())
         r = SimpleNamespace(ledger=FactLedger(), store=store, sec_meta={"submissions_sid": sub})
-        _md, _p, notes = full._load_external_us("PLTR", r, AS_OF)
-        return r, notes
+        md, _p, notes = full._load_external_us("PLTR", r, AS_OF)
+        return r, md + "\n" + notes
 
     calls = _stub(monkeypatch, [{"name": "PALANTIR USG INC", "amount": 3}])
     r, notes = run({"fiscalYearEnd": "1231", "name": "Palantir Technologies Inc."})
@@ -178,3 +178,25 @@ def test_外部资料加载器写入联邦合同_公司名取不到时不请求(
 def test_联邦合同挂自己的期间():
     from ir_agent import full
     assert "gov.contract_obligations_ttm".startswith(full._CONTEXT_PREFIXES)
+
+
+def test_联邦合同取到时说明进资料摘要_不进未生成清单(monkeypatch, tmp_path):
+    """PLTR 实跑：成功的金额说明被拼进「外部资料（…）」失败串，终端渲染成「未生成：…」。"""
+    from ir_agent import full
+    from ir_agent.sources import fmp, fomc, peer_filings
+    monkeypatch.setattr(fmp, "fetch_consensus", lambda *a, **k: None)
+    monkeypatch.setattr(fomc, "fetch_statements", lambda as_of, st: ([], ""))
+    monkeypatch.setattr(peer_filings, "peer_10k_docs", lambda r, as_of: ([], []))
+    store = SnapshotStore(tmp_path)
+    sub = store.save(source="sec_submissions", payload={"fiscalYearEnd": "1231", "name": "Palantir Technologies Inc."},
+                     url="u", fetched_at=datetime.now())
+    r = SimpleNamespace(ledger=FactLedger(), store=store, sec_meta={"submissions_sid": sub})
+    _stub(monkeypatch, [{"name": "PALANTIR USG INC", "amount": 3}])
+    md, _p, err = full._load_external_us("PLTR", r, AS_OF)
+    assert "PALANTIR USG INC" in md and "USAspending" not in err
+    _stub(monkeypatch, exc=requests.ConnectionError("x"))
+    md, _p, err = full._load_external_us("PLTR", SimpleNamespace(ledger=FactLedger(), store=SnapshotStore(tmp_path / "b"),
+                                                                 sec_meta={"submissions_sid": SnapshotStore(tmp_path / "b").save(
+                                                                     source="sec_submissions", payload={"fiscalYearEnd": "1231", "name": "Palantir Technologies Inc."},
+                                                                     url="u", fetched_at=datetime.now())}), AS_OF)
+    assert "USAspending" in err
