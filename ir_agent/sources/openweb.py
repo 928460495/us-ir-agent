@@ -87,6 +87,11 @@ _OFFICIAL_HOSTS: tuple[str, ...] = (
 # 这是正确的默认值。要支持，逐条核实后往这里加注册域。
 _SELLSIDE_HOSTS: tuple[str, ...] = ()
 
+# 有事实核查的通讯社（用户 2026-11-15 定）。后几家多数文章有付费墙，抓不到的自然落空
+_NEWSWIRE_HOSTS: tuple[str, ...] = (
+    "reuters.com", "apnews.com", "afp.com", "bloomberg.com", "wsj.com", "ft.com", "cnbc.com",
+)
+
 
 def _host_of(url: str) -> str:
     """取主机名，小写、去掉末尾的点（DNS 绝对域名写法）。取不到返回空串。
@@ -151,6 +156,9 @@ def tier_of_url(url: str) -> Tier:
     for entry in _OFFICIAL_HOSTS:
         if _matches(host, entry):
             return Tier.OFFICIAL
+    for entry in _NEWSWIRE_HOSTS:
+        if _matches(host, entry):
+            return Tier.NEWSWIRE
     return Tier.MEDIA
 
 

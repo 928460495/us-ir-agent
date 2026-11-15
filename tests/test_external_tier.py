@@ -14,8 +14,10 @@ from ir_agent.sources.external import TIER_LABEL, TIER_RULE, Tier
 def test_COMPANY_是第四个成员且值稳定():
     assert Tier.COMPANY.value == "company"
     assert Tier("company") is Tier.COMPANY
+    # 2026-11-15 加第五级 NEWSWIRE（通讯社，用户决定）
     assert set(Tier) == {Tier.OFFICIAL, Tier.SELLSIDE, Tier.MEDIA,
-                         Tier.COMPANY}
+                         Tier.COMPANY, Tier.NEWSWIRE}
+    assert Tier("newswire") is Tier.NEWSWIRE
 
 
 def test_COMPANY_有标签与可引用范围():

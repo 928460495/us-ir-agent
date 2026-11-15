@@ -216,6 +216,14 @@ _OFFICIAL_ASCII = (
     "U.S. DEPARTMENT OF COMMERCE", "DEPARTMENT OF COMMERCE", "FEDERAL REGISTER",
 )
 
+# 有事实核查的通讯社（用户 2026-11-15 定）。只收全称：「AP」「FT」两个字母太短，会被
+# 前缀匹配到别的名字上。「Bloomberg News」单列 —— NEWS 故意不在修饰词表里（媒体名构件）
+_NEWSWIRE_ASCII = (
+    "REUTERS", "THOMSON REUTERS", "ASSOCIATED PRESS", "THE ASSOCIATED PRESS",
+    "AGENCE FRANCE-PRESSE", "AGENCE FRANCE PRESSE", "AFP", "BLOOMBERG", "BLOOMBERG NEWS",
+    "WALL STREET JOURNAL", "THE WALL STREET JOURNAL", "FINANCIAL TIMES", "CNBC",
+)
+
 # 允许的修饰词——白名单全称命中后，剩余部分必须能被这张表里的词
 # **完整拼出**（可以是好几个词拼接，比如"研究部"+"官网"），拼不满就
 # 说明剩余部分里混进了白名单没解释到的东西（比如"中金公司观察"里的
@@ -264,6 +272,7 @@ _MODIFIERS = (
 )
 
 _SELLSIDE_NORM = tuple(_normalize(x) for x in _SELLSIDE_CN + _SELLSIDE_ASCII)
+_NEWSWIRE_NORM = tuple(_normalize(x) for x in _NEWSWIRE_ASCII)
 _OFFICIAL_NORM = tuple(_normalize(x) for x in _OFFICIAL_CN + _OFFICIAL_ASCII)
 _MODIFIERS_NORM = tuple(sorted({_normalize(x) for x in _MODIFIERS}, key=len,
                                 reverse=True))
@@ -380,6 +389,9 @@ def tier_of(publisher: str) -> Tier:
     for entry in _OFFICIAL_NORM:
         if entry and name.startswith(entry):
             candidates.append((len(entry), Tier.OFFICIAL))
+    for entry in _NEWSWIRE_NORM:
+        if entry and name.startswith(entry):
+            candidates.append((len(entry), Tier.NEWSWIRE))
     # 优先试最长的白名单前缀——多个全称都能作为前缀命中时，剩余部分
     # 更短，更可能被修饰词完全解释。这里确实会遇到同档内的前缀对，
     # 比如 SELLSIDE 里"中信建投"是"中信建投证券"的前缀（简称与公告/

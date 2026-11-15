@@ -49,7 +49,7 @@ def missing_files(rows: list[SourceRow]) -> list[str]:
 
 # 分节顺序。COMPANY 级文档按渠道再分：本司公告、本司电话会纪要、竞争对手的法定披露 ——
 # 同级不同源，混在「公司公告」里会让人把对手的 10-K 当成本司公告去核。
-KINDS = ("账本事实", "外部文档", "公司公告", "电话会纪要（二手转存）", "同业披露（竞争对手 10-K）",
+KINDS = ("账本事实", "外部文档", "通讯社", "公司公告", "电话会纪要（二手转存）", "同业披露（竞争对手 10-K）",
          "年报 PDF", "年报（10-K）", "同业样本")
 _CHANNEL_KIND = {"transcript": "电话会纪要（二手转存）", "peer_filing": "同业披露（竞争对手 10-K）"}
 
@@ -134,7 +134,8 @@ def collect_rows(ledger, corpus=None, pdf_dir=None, peers: tuple = (),
             if (p := Path(pdf_dir) / name).exists():
                 local = str(p)
         rows.append(SourceRow(
-            kind=(_CHANNEL_KIND.get(getattr(d, "channel", ""), "公司公告") if is_ann else "外部文档"),
+            kind=(_CHANNEL_KIND.get(getattr(d, "channel", ""), "公司公告") if is_ann
+                  else "通讯社" if getattr(d, "tier", None) is Tier.NEWSWIRE else "外部文档"),
             label=(getattr(d, "title", "") or "")[:40],
             origin=url,
             local=local,
