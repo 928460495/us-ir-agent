@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -83,18 +83,37 @@ def _fmp_quote(ticker: str, store) -> Quote:
                  market_cap=Decimal(str(cap)) if cap is not None else None)
 
 
-def _tiingo_close(ticker: str, store) -> Quote:
+def _tiingo_close(ticker: str, store, as_of: date | None = None) -> Quote:
+    """Tiingo 日终收盘。给了 `as_of` 时取 ≤ as_of 的最后一个交易日（周末、节假日退到之前一天）——
+    后续阶段隔天运行时用分析时点当日的价，不用今天的价（PLTR 2026-11-16）。"""
     t = normalize_ticker(ticker).lower()
     url = TIINGO_URL.format(ticker=t)
-    body = _http(url, "Tiingo 日线",
-                 headers={"Authorization": f"Token {_env('TIINGO_API_KEY')}",
-                          "Content-Type": "application/json"})
+    kw: dict = {"headers": {"Authorization": f"Token {_env('TIINGO_API_KEY')}",
+                            "Content-Type": "application/json"}}
+    params = None
+    if as_of is not None:
+        params = {"startDate": (as_of - timedelta(days=14)).isoformat(), "endDate": as_of.isoformat()}
+        kw["params"] = params
+    body = _http(url, "Tiingo 日线", **kw)
+    if isinstance(body, list) and as_of is not None:
+        body = [r for r in body if str(r.get("date", ""))[:10] <= as_of.isoformat()]
     if not isinstance(body, list) or not body or body[-1].get("close") is None:
         raise QuoteUnavailable(f"Tiingo 日线为空（{t}）")
     last = body[-1]
-    sid = store.save(source="tiingo_daily", payload=body, url=url, fetched_at=datetime.now())
+    sid = store.save(source="tiingo_daily", payload=body, url=url, fetched_at=datetime.now(),
+                     params=params)
     return Quote(price=Decimal(str(last["close"])), as_of=date.fromisoformat(last["date"][:10]),
                  source="tiingo", source_id=sid)
+
+
+def quote_sources(ticker: str, as_of: date, today: date | None = None):
+    """本司行情的取数顺序。分析时点早于「今天 − 1 天」时只走 Tiingo 当日收盘：FMP 只有实时报价，
+    时间戳晚于分析时点会被时点守卫整段剔除（相对估值、市值核对随之失效）。留 1 天是时区差。"""
+    today = today or date.today()
+    tiingo = ("tiingo", lambda t, store: _tiingo_close(t, store, as_of=as_of))
+    if as_of < today - timedelta(days=1):
+        return [tiingo]
+    return [("fmp_quote", _fmp_quote), tiingo]
 
 
 def fetch_peer_quotes(tickers: list[str], store) -> tuple[dict[str, Quote], list[str]]:

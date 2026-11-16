@@ -555,8 +555,8 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
             return facts
         return _f
 
-    quote_res = resolve.resolve([("fmp_quote", _src(us_quotes._fmp_quote)),
-                                 ("tiingo", _src(us_quotes._tiingo_close))],
+    quote_res = resolve.resolve([(name, _src(fetch))
+                                 for name, fetch in us_quotes.quote_sources(ticker, as_of)],
                                 cross_check=cross_check)
     for f in quote_res.facts:
         led.put(f)
