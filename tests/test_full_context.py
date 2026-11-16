@@ -2881,6 +2881,7 @@ def test_本分支新增的清单生产者逐个断言渲染标记(monkeypatch, 
                             "的「年报叙述章节（…）」—— 那是真缺口，落默认分支渲染"
                             "成未生成是对的"),
         "_load_openweb": "本分支未改动其清单措辞；共用 _openweb_notes",
+        "_judged_labels": "不是清单生产者：返回第③步要判断的年份标签（前五年）",
         "_us_federal_contracts": ("不是独立的清单生产者：说明并进 _load_external_us 的"
                                   "「外部资料（…）」一句；措辞断言在 tests/test_usaspending.py"),
         "_restore_openweb": "本分支未改动其清单措辞；共用 _openweb_notes",
