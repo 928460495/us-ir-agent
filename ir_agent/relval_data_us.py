@@ -108,6 +108,10 @@ def gather_us(r, as_of: date, snapshot_dir) -> tuple[PeerObs, list[PeerObs], lis
 
     comps_codes = list(getattr(r, "comps_codes", None) or [])
     notes: list[str] = []
+    from ir_agent.full import _peer_date_gap_note
+    gap = _peer_date_gap_note(qday, {t: q.as_of for t, q in quotes.items()})
+    if gap:
+        notes.append(gap)
     sample: list[PeerObs] = []
     for t, b in books.items():
         if t == tcode:

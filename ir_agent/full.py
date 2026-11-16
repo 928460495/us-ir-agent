@@ -1417,6 +1417,9 @@ def _load_comps_us(code: str, r, as_of: date) -> tuple[str, str, str]:
         return "", "", "可比（行业同业未取到：行业聚合未完成，见「行业」一节）"
     mc = next((f for f in (r.quotes.facts if r.quotes else []) if f.key == "market_cap"), None)
     qday = mc.as_of if mc else None
+    gap = _peer_date_gap_note(qday, {t: q.as_of for t, q in (r.peer_quotes or {}).items()})
+    if gap:
+        return "", "", f"可比（{gap}）"
     sized, dropped = [], []
     for t, b in books.items():
         q = r.peer_quotes.get(t)
@@ -2454,6 +2457,15 @@ def _review_stage(arts: dict):
         "本轮未产出 DCF 判断项（原因见上方未生成清单）——"
         "确定性层的产物（看板、工作簿、事实账本）仍然可用，"
         "但估值尚无从谈起")
+
+
+def _peer_date_gap_note(qday, peer_dates: dict) -> str:
+    """同业行情只有当天价（Tiingo IEX 批量），本司按分析时点取当日收盘：分析时点早于今天时同业的报价日
+    全部晚于本司，逐只剔除。这时只说一句原因，不逐只列（终审 I3b，2026-11-17）。"""
+    if qday is None or not peer_dates or not all(d > qday for d in peer_dates.values()):
+        return ""
+    return (f"分析时点 {qday.isoformat()} 早于同业行情日：同业只有当天行情（逐只取历史收盘超出免费额度），"
+            "无法按分析时点比较 —— 可比与相对估值本轮缺位；在分析时点当天运行可恢复")
 
 
 def _judged_labels(cal: dict) -> list[str]:

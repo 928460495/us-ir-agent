@@ -246,21 +246,23 @@ def fade_sensitivity(path: str) -> dict:
     import copy
     inp = V.read_inputs(path)
     price = inp["o"]["现价（美元）"]
-    n = inp["ny"]
-    g0 = inp["growth"][0]
+    n = inp["ny"]; nj = int(inp.get("nj") or n)
+    J0 = inp.get("judged") or inp
+    g0 = J0["growth"][0]
     gt = inp["dcf"]["永续增长率 g"]
     cur = _ps(inp)
     rows = []
-    for f in range(2, n + 1):
+    # 改判断期（第 1–nj 年）的增速路径：recompute 一律经 expand_paths(judged) 展开，第 nj+1 年起按过渡期
+    # 规则接着收敛到 g（终审 I4：此前改 inp["growth"] 不生效，九行全一样）
+    for f in range(2, nj + 1):
         i2 = copy.deepcopy(inp)
-        if f <= 1:
-            i2["growth"] = [gt] * n
-        else:
-            head = [round(g0 + (gt - g0) * i / (f - 1), 6) for i in range(f)]
-            i2["growth"] = head + [gt] * (n - f)
+        J = i2.get("judged") or i2
+        head = [round(g0 + (gt - g0) * i / (f - 1), 6) for i in range(f)]
+        J["growth"] = (head + [gt] * (nj - f))[:nj]
         ps = _ps(i2)
+        full_g = V.expand_paths(i2)["growth"]
         rows.append(dict(fade=f, ps=ps, upside=ps / price - 1 if price else None,
-                         mean_g=sum(i2["growth"]) / n))
+                         mean_g=sum(full_g) / n))
     return dict(current=cur, price=price, n=n, rows=rows,
                 note=("衰减期不能超过明确期 —— 若你认为竞争优势可维持更久，"
                       "需同时用 --years 拉长明确期，否则终值会在增速仍高时就接管"))

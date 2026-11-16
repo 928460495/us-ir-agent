@@ -136,3 +136,10 @@ def test_盈亏平衡对费用率按路径平移(built):
     assert "研发费用 / 营收（判断期均值）" in names and "销售及管理费用 / 营收（判断期均值）" in names
     out = BE.compute(built)
     assert out
+
+
+def test_衰减期敏感性各行不同(built):
+    """终审 I4：fade_sensitivity 改的是 inp["growth"]，recompute 一律经 expand_paths(judged) —— 九行全一样。"""
+    import us_breakeven as BE
+    rows = BE.fade_sensitivity(built)["rows"]
+    assert len({round(r["ps"], 6) for r in rows}) > 1

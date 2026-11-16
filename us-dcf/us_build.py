@@ -1384,10 +1384,13 @@ def _engine(wb, cal, D_):
                     gexp = LG; gmexp = lambda t: f"({LM(t)}+{_d(t, f'$C{r}')})"
                     wexp = f"$B{r}"; gtexp = LGT
                 if gtexp != LGT and NY > NJ:
-                    # 本表变动永续 g：过渡期增速也收敛到本行的 g（与假设页的过渡期公式同一规则）
-                    _g0 = gexp
-                    gexp = (lambda t, _g0=_g0, _gt=gtexp: _g0(t) if t <= NJ else
-                            f"({_g0(NJ)}+({_gt}-{_g0(NJ)})*{t - NJ}/{NY - NJ})")
+                    # 本表变动永续 g：过渡期增速也收敛到本行的 g，与假设页同一规则 —— 从第 NJ 年的**原始**值
+                    # （生效值扣掉全局 Δ）收敛，全局 Δ 与本行 Δ 加在每一年（终审 I2：此前 Δ 在第 10 年消失）
+                    _g0 = gexp; _DG = f"{A}!$B${R['DG']}"
+                    _dr = f"+$B{r}" if mode == "g_gterm" else ""
+                    _b5 = f"({LG(NJ)}-{_DG})"
+                    gexp = (lambda t, _g0=_g0, _gt=gtexp, _b5=_b5, _dr=_dr, _DG=_DG: _g0(t) if t <= NJ else
+                            f"({_b5}+({_gt}-{_b5})*{t - NJ}/{NY - NJ}+{_DG}{_dr})")
                 # 终值 WACC：本行 WACC −（Beta − 终值 Beta）× ERP ×（1 − Wd）
                 wt = (f"({wexp}-($B${AR['Beta']}-$B${AR['终值Beta']})*$B${AR['ERP']}"
                       f"*(1-$B${AR['债务权重']}))")

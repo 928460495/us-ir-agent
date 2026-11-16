@@ -113,7 +113,15 @@ def quote_sources(ticker: str, as_of: date, today: date | None = None):
     tiingo = ("tiingo", lambda t, store: _tiingo_close(t, store, as_of=as_of))
     if as_of < today - timedelta(days=1):
         return [tiingo]
-    return [("fmp_quote", _fmp_quote), tiingo]
+
+    def fmp_guarded(t, store):
+        # 「今天 − 1」那一天：美股开盘后 FMP 报价日已是今天、晚于分析时点 —— 算不可用，退回 Tiingo
+        #（终审 I3a：PLTR 分析时点 11-15、11-16 开盘后跑，FMP 报价被时点守卫剔除，resolve 不会自己退回）
+        q = _fmp_quote(t, store)
+        if q.as_of > as_of:
+            raise QuoteUnavailable(f"FMP 报价日 {q.as_of} 晚于分析时点 {as_of}")
+        return q
+    return [("fmp_quote", fmp_guarded), tiingo]
 
 
 def fetch_peer_quotes(tickers: list[str], store) -> tuple[dict[str, Quote], list[str]]:
