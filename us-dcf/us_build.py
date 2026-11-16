@@ -267,7 +267,8 @@ def build(cal: dict, path: str) -> dict:
             v = float(v)
         except (TypeError, ValueError):
             return None
-        return None if not np.isfinite(v) else round(v, 2)
+        # 不截两位：期初余额要与假设页同精度，否则利息收益起的整条链与验算器差 ~1e-6（PLTR 2026-11-16）
+        return None if not np.isfinite(v) else round(v, 6)
 
     # ================= 1_Assumptions =================
     ws = wb.active; ws.title = "1_Assumptions"; ws.sheet_properties.tabColor = NAVY
@@ -673,7 +674,8 @@ def _statements(wb, cal, path):
             v = float(v)
         except (TypeError, ValueError):
             return None
-        return None if not np.isfinite(v) else round(v, 2)
+        # 不截两位：期初余额要与假设页同精度，否则利息收益起的整条链与验算器差 ~1e-6（PLTR 2026-11-16）
+        return None if not np.isfinite(v) else round(v, 6)
 
     def hrow(df, col):
         return [hv(df, col, i) for i in range(NH)]
@@ -726,7 +728,7 @@ def _statements(wb, cal, path):
     emit(wi, RC, "Cost of revenue 营业成本", cogsh,
          lambda c, i: f"={c}{RV}*(1-{A}!$E${M_ROW+i}-{A}!$B${R['DM']})")
     emit(wi, RGP, "Gross profit 毛利",
-         [round(revh[i] - cogsh[i], 2) if revh[i] is not None and cogsh[i] is not None else None
+         [round(revh[i] - cogsh[i], 6) if revh[i] is not None and cogsh[i] is not None else None
           for i in range(NH)], lambda c, i: f"={c}{RV}-{c}{RC}", NUM, True)
     emit(wi, RGM, "  毛利率",
          [round(1 - cogsh[i] / revh[i], 6) if revh[i] and cogsh[i] is not None else None
