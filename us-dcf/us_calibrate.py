@@ -364,7 +364,13 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
                            round(min(g_hist), 4), round(max(g_hist), 4)),
                   gm_stats=(round(gm_mean, 4), round(float(np.std(gm_hist)), 4),
                             round(min(gm_hist), 4), round(max(gm_hist), 4)),
-                  buyback=round(buyback, 5)),
+                  buyback=round(buyback, 5),
+                  # 费用率逐年历史：第③步判断项的参照（opex_judg.history_lines）。看趋势，不取均值
+                  opex_hist={"years": [fy_lab(e) for e in ends],
+                             "研发费用率": [round(float(x), 4) if np.isfinite(x) else None
+                                        for x in R("研发费用")],
+                             "销售及管理费用率": [round(float(x), 4) if np.isfinite(x) else None
+                                             for x in sga_hist]}),
         dcf=dict(rf=rf, erp=(geo["erp"] if geo["ok"] else erp_i["erp"]), beta=beta5, kd=kdinfo["kd"], wd=round(wd, 4),
                  # 终值税率用【合并边际税率】而非联邦法定税率：
                  # 21%（联邦）+ 5%（州加权）×(1 − 21%) = 24.95% ≈ 25%。
@@ -372,7 +378,9 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
                  # 高估 5.06%，而终值占 EV 约 67–75%。
                  g=.025, t_term=.25, midyear=1, roll=roll,
                  nonop=round(o["lti"], 1), mi_mode=2,
-                 rd_cap=1, rd_life=_life, roic_mode=1),
+                 rd_cap=1, rd_life=_life,
+                 # 终值 ROIC 默认收敛至 WACC + 溢价、终值 Beta 向 1（spec 2026-11-16，Damodaran / 麦肯锡 RONIC）
+                 roic_mode=2, beta_term=1.0),
         rdcap=dict(**rdcap, rd_hist=[round(_rd_all[k], 1) for k in sorted(_rd_all)][-8:],
                    ic_reported=round(ic["operating"], 1), ic_financing=round(ic["financing"], 1),
                    ic_gap=ic["gap"], ic_rdcap=round(o["ic_rdcap"], 1)),

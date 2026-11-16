@@ -58,6 +58,17 @@ def _last_proj(wb) -> str:
     return [h for h in hdr if h and str(h).endswith("E")][-1]
 
 
+def _mode1(wb):
+    # 2026-11-16 起默认模式 2（收敛），「忽略模式开关」在默认设置下是空操作；先拨回模式 1 才有意义
+    _set("1_Assumptions", "终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）", 1)(wb)
+
+
+def _ignore_mode(wb):
+    _mode1(wb)
+    d = wb["5_DCF"]; m = _rows(d)
+    d.cell(m["终值 ROIC（生效）"], 2, f"=B{m['终值 ROIC（收敛口径）']}")
+
+
 def _drop_degrade(wb):
     _force_degrade(wb)
     d = wb["5_DCF"]; m = _rows(d)
@@ -87,8 +98,7 @@ MUTATIONS = {
         wb["5_DCF"], _rows(wb["5_DCF"])),
     "研发资本漏本期支出": lambda wb: wb["3_Balance"].__setitem__("H33", "='3_Balance'!G33-'3_Balance'!H32"),
     "研发摊销年限改错": lambda wb: wb["3_Balance"].__setitem__("H32", "='3_Balance'!G33/99"),
-    "终值ROIC忽略模式开关": lambda wb: (lambda d, m: d.cell(m["终值 ROIC（生效）"], 2, f"=B{m['终值 ROIC（收敛口径）']}"))(
-        wb["5_DCF"], _rows(wb["5_DCF"])),
+    "终值ROIC忽略模式开关": _ignore_mode,
 }
 
 
@@ -101,7 +111,7 @@ def _verify_after(tmp_path, fn):
     return V.verify(str(dst), quiet=True)
 
 
-@pytest.mark.parametrize("ctrl", [lambda wb: None, _force_degrade], ids=["原样", "强制降级"])
+@pytest.mark.parametrize("ctrl", [lambda wb: None, _force_degrade, _mode1], ids=["原样", "强制降级", "模式1"])
 def test_对照组零失败(tmp_path, ctrl):
     fails, dv = _verify_after(tmp_path, ctrl)
     assert fails == []

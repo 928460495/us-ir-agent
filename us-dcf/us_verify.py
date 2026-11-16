@@ -189,7 +189,7 @@ def read_inputs(path: str) -> dict:
           "归母权益", "夹层权益", "期初研发资本（Damodaran）",
           "基期营业收入", "摊薄股数（百万股）", "现价（美元）"]}
     gen = {k: float(g(k)) for k in
-           ["研发费用 / 营收", "销售及管理费用 / 营收", "其他经营损益 / 营收", "有效所得税率",
+           ["其他经营损益 / 营收", "有效所得税率",
             "少数股东损益占比", "其他流动资产 / 营收", "其他流动负债 / 营收",
             "应收周转天数 DSO", "存货周转天数 DIO", "应付周转天数 DPO",
             "折旧率（占期初固定资产净额）", "无形摊销 / 营收", "有息负债利率", "现金收益率",
@@ -200,12 +200,32 @@ def read_inputs(path: str) -> dict:
             "期中折现开关（1=是 0=否）", "估值基准日滚动年数", "非经营资产（加回）",
             "少数股东扣除方式（1=账面 2=价值）", "SBC 加回开关（0=费用化 1=加回）",
             "研发资本化开关（1=开 0=关）", "研发摊销年限（年）",
-            "终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）",
-            "终值 ROIC 收敛溢价（模式2 用）"]}
+            "终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"]}
+    # 终值 Beta（2026-11-16）：旧工作簿没有这一行时按明确期 Beta（等于没有收敛）
+    try:
+        dcf["终值 Beta（向 1 收敛）"] = float(g("终值 Beta（向 1 收敛）"))
+    except KeyError:
+        dcf["终值 Beta（向 1 收敛）"] = dcf["Beta（5年对标普500回归+Blume）"]
+
+    def steady(lbl):
+        return float(a.cell(_find(am, lbl), 1 + scen).value)
+    # ROIC 溢价：DR 这一格默认是公式（取稳态区当前情景）；被人改成数字时以数字为准
+    pv = a.cell(_find(am, "终值 ROIC 收敛溢价（模式2 用）"), 2).value
+    dcf["终值 ROIC 收敛溢价（模式2 用）"] = (steady("终值 ROIC 收敛溢价（三档）")
+                                       if isinstance(pv, str) else float(pv))
     fin = {k: float(g(k)) for k in
            ["年度回购金额 / 营收", "回购均价（美元/股）", "增发股数（百万股）", "增发价（美元/股）",
             "增发费用率", "增发到账年份序号（1=首个预测年）", "募资投向 — 资本开支", "桥接折现年数"]}
     dg = float(g("全期营收增速 Δ")); dm = float(g("全期毛利率 Δ"))
+    try:
+        nj = int(float(g("判断项年数（其后为过渡期）")))
+    except KeyError:
+        nj = ny
+    judged = dict(growth=path3("营收增速", nj), gm=path3("毛利率", nj),
+                  rd=path3("研发费用 / 营收", nj), sga=path3("销售及管理费用 / 营收", nj),
+                  capex=path3("资本开支 / 营收", nj), sbc=path3("SBC / 营收", nj))
+    st = dict(gm=steady("稳态毛利率"), rd=steady("稳态 研发费用 / 营收"),
+              sga=steady("稳态 销售及管理费用 / 营收")) if nj < ny else {}
     it = None
     try:
         sw = float(g("锚定开关"))
@@ -229,11 +249,36 @@ def read_inputs(path: str) -> dict:
         if q:
             it = dict(sw=sw, k=q["k"], rev=sum(cur_r), cogs=sum(cur_c),
                       fy_rev=q["fy_rev"], fy_cogs=q["fy_cogs"])
-    return dict(hdr=hdr, nh=nh, ny=ny, o=o, gen=gen, dcf=dcf, fin=fin, dg=dg, dm=dm, it=it,
-                growth=[x + dg for x in path3("营收增速", ny)],
-                gm=[x + dm for x in path3("毛利率", ny)],
-                capex=path3("资本开支 / 营收", ny),
-                sbc=path3("SBC / 营收", ny))
+    inp = dict(hdr=hdr, nh=nh, ny=ny, nj=nj, o=o, gen=gen, dcf=dcf, fin=fin, dg=dg, dm=dm, it=it,
+               judged=judged, steady=st)
+    # 生效路径（展示与兼容旧调用方用）。重算一律经 expand_paths —— 改永续 g 时过渡期跟着变
+    inp.update(expand_paths(inp))
+    return inp
+
+
+def expand_paths(inp: dict) -> dict:
+    """判断的第 1–nj 年 → 全部 ny 年的生效路径（spec 2026-11-16）。
+
+    过渡期（nj+1 … ny）：营收增速线性回落到永续增长率 g；毛利率、研发与销售管理费用率线性收敛到稳态值；
+    资本开支率、SBC 率沿用第 nj 年。第 ny 年恰为目标。规则与工作簿过渡期公式同一条，但这里**不读**那些
+    公式 —— 验算器独立展开，才验得出公式写错。Δ（敏感性平移）加在每一年的生效值上，与工作簿生效列一致。
+    """
+    src = inp.get("judged") or inp
+    ny = int(inp["ny"]); nj = int(inp.get("nj") or len(src["growth"]))
+    st = inp.get("steady") or {}
+    g = inp["g"] if "g" in inp else inp["dcf"]["永续增长率 g"]
+    dg = float(inp.get("dg", 0.0)); dm = float(inp.get("dm", 0.0))
+
+    def fade(xs, target):
+        base = [float(x) for x in list(xs)[:nj]]
+        last = base[-1]
+        for t in range(nj + 1, ny + 1):
+            base.append(last if target is None else last + (target - last) * (t - nj) / (ny - nj))
+        return base[:ny]
+    return dict(growth=[x + dg for x in fade(src["growth"], g)],
+                gm=[x + dm for x in fade(src["gm"], st.get("gm"))],
+                rd=fade(src["rd"], st.get("rd")), sga=fade(src["sga"], st.get("sga")),
+                capex=fade(src["capex"], None), sbc=fade(src["sbc"], None))
 
 
 def recompute(inp: dict):
@@ -247,7 +292,8 @@ def recompute(inp: dict):
              mi=src["少数股东权益"], eq=src["归母权益"], sh=src["摊薄股数（百万股）"],
              rda=src["期初研发资本（Damodaran）"])
     rev = src["基期营业收入"]; rows = []
-    growth = list(inp["growth"]); gmp = list(inp["gm"])
+    full = expand_paths(inp)
+    growth = list(full["growth"]); gmp = list(full["gm"])
     IT = inp.get("it")
     if IT and IT["sw"] == 1 and IT.get("fy_rev"):
         # 锚定：首年生效增速/毛利率由已披露季度按年初至今同比外推（与「1_Assumptions」生效值列一致）
@@ -257,7 +303,7 @@ def recompute(inp: dict):
     for i in range(ny):
         rev = rev * (1 + growth[i]); cogs = rev * (1 - gmp[i])
         gp = rev - cogs
-        rd = rev * G["研发费用 / 营收"]; sga = rev * G["销售及管理费用 / 营收"]
+        rd = rev * full["rd"][i]; sga = rev * full["sga"][i]
         oo = rev * G["其他经营损益 / 营收"]
         ebit = gp - rd - sga + oo
         ie = (o["std"] + o["cur"] + o["ltd"]) * G["有息负债利率"]
@@ -265,7 +311,7 @@ def recompute(inp: dict):
         pbt = ebit - ie + ii
         tax = pbt * t; ni = pbt - tax
         mi = ni * G["少数股东损益占比"]; nip = ni - mi
-        sbc = rev * inp["sbc"][i]
+        sbc = rev * full["sbc"][i]
         ar = rev * G["应收周转天数 DSO"] / 365
         iv = cogs * G["存货周转天数 DIO"] / 365
         oca = rev * G["其他流动资产 / 营收"]
@@ -277,7 +323,7 @@ def recompute(inp: dict):
                if F["募资投向 — 资本开支"] > 0
                and F["增发到账年份序号（1=首个预测年）"] <= i + 1 <= F["增发到账年份序号（1=首个预测年）"] + 2
                else 0.0)
-        capex = -(rev * inp["capex"][i] + fcx)          # 负数 = 流出
+        capex = -(rev * full["capex"][i] + fcx)         # 负数 = 流出
         ppe = o["ppe"] - capex - dep
         gwi = o["gwi"] - amt
         dwc = -(ar - o["ar"]) - (iv - o["inv"]) - (oca - o["oca"]) + (ap - o["ap"]) + (ocl - o["ocl"])
@@ -317,6 +363,10 @@ def recompute(inp: dict):
     ke = D["无风险利率 Rf（10Y UST）"] + D["Beta（5年对标普500回归+Blume）"] * D["股权风险溢价 ERP"]
     kd = D["无风险利率 Rf（10Y UST）"] + D["信用利差"]
     w = (1 - D["债务权重 D/(D+E)"]) * ke + D["债务权重 D/(D+E)"] * kd * (1 - t)
+    # 终值 WACC：终值 Beta 向 1（只用于终值的分母与 ROIC 收敛基准；折现到今天仍用 w）
+    w_t = ((1 - D["债务权重 D/(D+E)"]) * (D["无风险利率 Rf（10Y UST）"]
+                                     + D["终值 Beta（向 1 收敛）"] * D["股权风险溢价 ERP"])
+           + D["债务权重 D/(D+E)"] * kd * (1 - t))
     gt = D["永续增长率 g"]; tt = D["终值所得税率 t_term"]; my = D["期中折现开关（1=是 0=否）"]
     last = rows[-1]
     # 投入资本：营运资本 + 固定资产 + 商誉无形 + 其他非流动资产 − 其他非流动负债。
@@ -325,12 +375,12 @@ def recompute(inp: dict):
     ic = ic_rep + (last["rda"] if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0)
     nopat = last["ebit"] * (1 - tt)
     roic_calc = nopat / ic if ic else float("inf")
-    roic = ((w + D["终值 ROIC 收敛溢价（模式2 用）"])
+    roic = ((w_t + D["终值 ROIC 收敛溢价（模式2 用）"])
             if D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"] == 2 else roic_calc)
     rr = gt / roic if roic else float("inf")
-    degrade = (ic <= 0) or (roic <= w) or (rr >= 1) or (rr < 0) or not np.isfinite(rr)
+    degrade = (ic <= 0) or (roic <= w_t) or (rr >= 1) or (rr < 0) or not np.isfinite(rr)
     tf = nopat if degrade else last["ebit"] * (1 + gt) * (1 - tt) * (1 - rr)
-    tv = nopat / w if degrade else tf / (w - gt)
+    tv = nopat / w_t if degrade else tf / (w_t - gt)
     pv = sum(rows[i]["fcff"] / (1 + w) ** (i + 1 - 0.5 * my) for i in range(ny))
     pvtv = tv / (1 + w) ** (ny - 0.5 * my)
     ev0 = pv + pvtv
@@ -345,7 +395,7 @@ def recompute(inp: dict):
               else gx * G["少数股东损益占比"])
     eqv = gx - mi_ded
     sh0 = src["摊薄股数（百万股）"] + F["增发股数（百万股）"]
-    return rows, dict(ke=ke, kd=kd, wacc=w, ic=ic, ic_rep=ic_rep, roic_calc=roic_calc,
+    return rows, dict(ke=ke, kd=kd, wacc=w, wacc_term=w_t, ic=ic, ic_rep=ic_rep, roic_calc=roic_calc,
                       roic=roic, rr=rr, nopat=nopat,
                       roic_mode=D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"],
                       degrade=1.0 if degrade else 0.0, tf=tf, tv=tv, pv=pv, pvtv=pvtv,

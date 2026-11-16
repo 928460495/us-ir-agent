@@ -99,10 +99,15 @@ def simulate(inp: dict, P: dict) -> dict:
     o = inp["o"]; G = inp["gen"]; D = inp["dcf"]; F = inp["fin"]; ny = inp["ny"]
     n = int(P["n_paths"]); rng = np.random.default_rng(int(P["seed"]))
 
-    g_live = np.array(inp["growth"], dtype=float)
-    m_live = np.array(inp["gm"], dtype=float)
-    cx_live = np.array(inp["capex"], dtype=float)
-    sb_live = np.array(inp["sbc"], dtype=float)
+    import us_verify as V
+    # 生效路径与 us_verify.recompute 同一来源（判断期 + 过渡期向稳态收敛，2026-11-16）
+    full = V.expand_paths(inp)
+    g_live = np.array(full["growth"], dtype=float)
+    m_live = np.array(full["gm"], dtype=float)
+    cx_live = np.array(full["capex"], dtype=float)
+    sb_live = np.array(full["sbc"], dtype=float)
+    rd_live = np.array(full["rd"], dtype=float)
+    sg_live = np.array(full["sga"], dtype=float)
     # 首年锚定（与 us_verify.recompute、ashare_mc 一致）：已公布季度实际 + 机械外推，不是判断，
     # 不加随机扰动。此前 us_mc 完全没处理锚定，关掉随机后复现不出确定性模型。
     IT = inp.get("it")
@@ -128,17 +133,18 @@ def simulate(inp: dict, P: dict) -> dict:
     kd = D["无风险利率 Rf（10Y UST）"] + D["信用利差"]
     wd = D["债务权重 D/(D+E)"]
     W = (1 - wd) * ke + wd * kd * (1 - tax)
+    # 终值 WACC：终值 Beta 向 1（不随机），与 recompute 同式
+    WT = ((1 - wd) * (D["无风险利率 Rf（10Y UST）"] + D["终值 Beta（向 1 收敛）"] * D["股权风险溢价 ERP"])
+          + wd * kd * (1 - tax))
     gt = np.clip(rng.normal(D["永续增长率 g"], P["sd_gt"], n), P["lo_gt"], None)
     gt_raw = gt.copy()
-    gt = np.minimum(gt, W - P["gap_gt"])
+    gt = np.minimum(gt, WT - P["gap_gt"])
     rej_g = float((gt_raw > gt).mean())
     clipped = float(max(rej_gm, rej_b, rej_t, rej_c, rej_g))
     rej_detail = dict(增速与毛利率=rej_gm, Beta=rej_b, 有效税率=rej_t,
                       资本开支=rej_c, 永续g=rej_g)
 
-    opex = G["研发费用 / 营收"] + G["销售及管理费用 / 营收"]
     oth = G["其他经营损益 / 营收"]
-    rd_rate = G["研发费用 / 营收"]
     life = D["研发摊销年限（年）"] or 1
     sbc_on = 1.0 if D["SBC 加回开关（0=费用化 1=加回）"] == 1 else 0.0
 
@@ -158,7 +164,7 @@ def simulate(inp: dict, P: dict) -> dict:
         else:
             rev = rev * (1 + g_live[t] + dg + eg[t])
             cogs = rev * (1 - (m_live[t] + dm + em[t]))
-        ebit = rev - cogs - rev * opex + rev * oth
+        ebit = rev - cogs - rev * (rd_live[t] + sg_live[t]) + rev * oth
         dep = ppe * G["折旧率（占期初固定资产净额）"]
         amt = rev * G["无形摊销 / 营收"]
         fcx = (F["募资投向 — 资本开支"] / 3
@@ -166,7 +172,7 @@ def simulate(inp: dict, P: dict) -> dict:
         capex = rev * np.clip(cx_live[t] + dcx, 0.0, None) + fcx
         ppe = ppe + capex - dep
         gwi = gwi - amt
-        rda = rda + rev * rd_rate - rda / life
+        rda = rda + rev * rd_live[t] - rda / life
         nwc = (rev * G["应收周转天数 DSO"] / 365 + cogs * G["存货周转天数 DIO"] / 365
                + rev * G["其他流动资产 / 营收"] - cogs * G["应付周转天数 DPO"] / 365
                - rev * G["其他流动负债 / 营收"])
@@ -182,14 +188,14 @@ def simulate(inp: dict, P: dict) -> dict:
           + (rda if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0))
     nopat_T = ebit * (1 - tt)
     roic_calc = np.where(ic != 0, nopat_T / np.where(ic != 0, ic, 1.0), np.inf)
-    roic = (W + D["终值 ROIC 收敛溢价（模式2 用）"]
+    roic = (WT + D["终值 ROIC 收敛溢价（模式2 用）"]
             if D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"] == 2 else roic_calc)
     rr = np.where(roic > 0, gt / np.where(roic > 0, roic, 1.0), np.inf)
     # ROIC ≤ WACC 时增长不创造价值，Gordon 式 (1−g/ROIC) 会失真甚至变号。
     # 经济上正确的处理是降级为【无增长永续】TV = NOPAT / WACC。
-    degrade = (ic <= 0) | (roic <= W) | (rr >= 1) | (rr < 0) | ~np.isfinite(rr)
+    degrade = (ic <= 0) | (roic <= WT) | (rr >= 1) | (rr < 0) | ~np.isfinite(rr)
     tf_gordon = ebit * (1 + gt) * (1 - tt) * (1 - np.where(np.isfinite(rr), rr, 0.0))
-    tv = np.where(degrade, nopat_T / W, tf_gordon / (W - gt))
+    tv = np.where(degrade, nopat_T / WT, tf_gordon / (WT - gt))
     neg_ebit = float((ebit <= 0).mean()); degraded = float(degrade.mean())
     pvtv = tv / (1 + W) ** (ny - 0.5 * MY)
     ev0 = pv + pvtv
@@ -234,13 +240,14 @@ def _shifted(inp, P, key, shift):
     """把某个变量的均值平移 shift，其余不随机，返回单路径每股价值。"""
     import copy
     inp2=copy.deepcopy(inp); P2=dict(P); P2["n_paths"]=1
-    if key=="sd_g":     inp2["growth"]=[x+shift for x in inp["growth"]]
+    J=inp2.get("judged") or inp2      # 重算经 expand_paths 展开判断期；平移判断期的数才生效
+    if key=="sd_g":     J["growth"]=[x+shift for x in J["growth"]]
 
-    elif key=="sd_m":   inp2["gm"]=[x+shift for x in inp["gm"]]
+    elif key=="sd_m":   J["gm"]=[x+shift for x in J["gm"]]
 
     elif key=="sd_beta":inp2["dcf"]=dict(inp["dcf"]); inp2["dcf"]["Beta（5年对标普500回归+Blume）"]+=shift
     elif key=="sd_gt":  inp2["dcf"]=dict(inp["dcf"]); inp2["dcf"]["永续增长率 g"]+=shift
-    elif key=="sd_cx":  inp2["capex"]=[x+shift for x in inp["capex"]]
+    elif key=="sd_cx":  J["capex"]=[x+shift for x in J["capex"]]
     elif key=="sd_tax": inp2["gen"]=dict(inp["gen"]); inp2["gen"]["有效所得税率"]+=shift
     return float(simulate(inp2, P2)["ps"][0])
 

@@ -44,21 +44,24 @@ def _path_mean(xs):
 
 
 def _shift_path(inp, key, new_mean):
-    """路径类变量：整体平移到新的均值，保持年际形状不变。"""
-    cur = _path_mean(inp[key])
+    """路径类变量：判断期（第 1–5 年）整体平移到新的均值，保持年际形状不变。重算经 expand_paths 从判断期
+    展开过渡期（2026-11-16），所以平移的是判断期的数；过渡期向稳态收敛，平移量逐年淡出。"""
+    J = inp.get("judged") or inp
+    cur = _path_mean(J[key])
     d = new_mean - cur
-    inp[key] = [x + d for x in inp[key]]
+    J[key] = [x + d for x in J[key]]
+
+
+def _jmean(key):
+    return lambda i: _path_mean((i.get("judged") or i)[key])
 
 
 DRIVERS = [
-    ("营收增速（全期均值）", "pct", "path", "growth",
-     lambda i: _path_mean(i["growth"]), (-0.60, 1.50)),
-    ("毛利率（全期均值）", "pct", "path", "gm",
-     lambda i: _path_mean(i["gm"]), (0.01, 0.95)),
-    ("资本开支 / 营收（全期均值）", "pct", "path", "capex",
-     lambda i: _path_mean(i["capex"]), (0.0, 0.90)),
-    ("研发费用 / 营收", "pct", "gen", "研发费用 / 营收", None, (0.0, 0.90)),
-    ("销售及管理费用 / 营收", "pct", "gen", "销售及管理费用 / 营收", None, (0.0, 0.90)),
+    ("营收增速（判断期均值）", "pct", "path", "growth", _jmean("growth"), (-0.60, 1.50)),
+    ("毛利率（判断期均值）", "pct", "path", "gm", _jmean("gm"), (0.01, 0.95)),
+    ("资本开支 / 营收（判断期均值）", "pct", "path", "capex", _jmean("capex"), (0.0, 0.90)),
+    ("研发费用 / 营收（判断期均值）", "pct", "path", "rd", _jmean("rd"), (0.0, 0.90)),
+    ("销售及管理费用 / 营收（判断期均值）", "pct", "path", "sga", _jmean("sga"), (0.0, 0.90)),
     ("有效所得税率", "pct", "gen", "有效所得税率", None, (0.0, 0.95)),
     # ⚠ 折旧率在本模型里只进 FCFF 加回与 PP&E 滚动，【不进 EBIT】——
     # EBIT 由毛利率与费用率驱动，历史值里已含折旧，但改折旧率并不会改 EBIT。
