@@ -1808,8 +1808,8 @@ PROMPT = """把前面的分析结论，落到 DCF 模型的判断项上。
 """
 
 
-_SCALAR_HEAD = """**你只填这两项**：逐年营收增速、逐年毛利率。
-费用率、周转天数、折旧率、税率、β、债务成本等由历史财务数据校准而来，
+_SCALAR_HEAD = """**营收与毛利率**：逐年营收增速、逐年毛利率（费用率与稳态值见下一节）。
+周转天数、折旧率、税率、β、债务成本等由历史财务数据校准而来，
 已经算好，不需要也不应该由你改动。
 
 对每一项、每一年给出一行：
@@ -2017,6 +2017,8 @@ def build_prompt(judg: dict, labels: list[str], context: str,
         head = _factor_head(decomps, factor_data or {}, us=us)
     else:
         head = _formula_head(m, factor_data or {}, ledger_bases, us=us)
+    from ir_agent import opex_judg as OJ
+    head = head + "\n\n" + OJ.prompt_section("us" if us else "cn", judg)
     return PROMPT.format(head=head, years=len(labels), labels="、".join(labels),
                          history="\n".join(hist) or "  （无）",
                          context=context, brief=brief or "（无）")
