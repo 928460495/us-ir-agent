@@ -983,11 +983,30 @@ def revenue_geography(ticker: str) -> dict | None:
     row = arr[0]
     data = {k: float(v) for k, v in (row.get("data") or {}).items()
             if isinstance(v, (int, float)) and v > 0}
-    tot = sum(data.values())
-    if tot <= 0:
+    weights = _geo_weights(data)
+    if not weights:
         return None
-    return dict(fy=row.get("fiscalYear"), date=row.get("date"),
-                weights={k: v / tot for k, v in data.items()})
+    return dict(fy=row.get("fiscalYear"), date=row.get("date"), weights=weights)
+
+
+_GEO_AGGREGATE = ("CONCENTRATION", "TOTAL", "CONSOLIDATED")
+
+
+def _geo_weights(data: dict) -> dict:
+    """地区收入 → 权重。先剔除不是地区的合计项：名称带 Concentration / Total / Consolidated 的，
+    以及金额约等于其余成员之和的那一项（XBRL 集中度风险轴的基准成员 = 营收合计）。PLTR 2026-11-16：
+    FMP 返回「Geographic Concentration Risk」= 营收合计，不剔除时真实地区权重全被压半。"""
+    data = {k: v for k, v in data.items() if not any(t in k.upper() for t in _GEO_AGGREGATE)}
+    tot = sum(data.values())
+    for k, v in list(data.items()):
+        rest = tot - v
+        if len(data) > 2 and rest > 0 and abs(v - rest) <= 0.01 * rest:
+            data.pop(k)
+            tot = rest
+            break
+    if tot <= 0:
+        return {}
+    return {k: v / tot for k, v in data.items()}
 
 
 def geo_weighted_erp(ticker: str, implied_erp: float) -> dict:
@@ -1020,8 +1039,15 @@ def geo_weighted_erp(ticker: str, implied_erp: float) -> dict:
             wsum += w * c
             rows.append(dict(segment=name, weight=w, mapped=key or ("非美国加权" if kind == "exus" else "?"),
                              crp=round(c, 5)))
-    if unmapped > 0:            # 未映射部分按已映射部分的加权 CRP 补，并显式提示
-        wsum += unmapped * (wsum / max(1e-9, 1 - unmapped))
+    if unmapped > 0:
+        # 未映射部分按已映射部分的加权 CRP 补，并把补的值写进该行 —— 工作簿 ERP 是活公式
+        # Σ(权重 × CRP)，空格按 0 算会与这里的 ERP 不一致，验算器也解析不了（PLTR 2026-11-16）
+        fill = round(wsum / max(1e-9, 1 - unmapped), 5)
+        for row_ in rows:
+            if row_["crp"] is None:
+                row_["crp"] = fill
+                row_["mapped"] = "⚠ 未映射（按已映射加权均值补）"
+        wsum += unmapped * fill
     return dict(erp=round(base + wsum, 5), base=round(base, 5), rows=rows, ok=True,
                 unmapped=round(unmapped, 4), weighted_crp=round(wsum, 5),
                 fy=geo.get("fy"), note=crp["source"])
