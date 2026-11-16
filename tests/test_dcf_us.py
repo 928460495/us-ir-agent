@@ -216,3 +216,31 @@ def test_批准清单_美股主动不锚定的横幅说明首年判断项直接�
            "interim_skip": "上游关闭首年锚定：ir-agent 美股版首年直接用判断项（用户 2026-10-27 决定）"}
     b = full._anchor_banner(cal, ["FY2026E"], us=True)
     assert "FY2026E 不锚定" in b and "直接进模型" in b and "不能按季度估算" not in b
+
+
+# ── PLTR 2026-11-16（用户选 A）：股数 × 现价与独立来源市值对得上时，10 倍偏差不判「不可采信」 ──
+
+def test_市值核对一致时量级告警不判不可采信():
+    w = dcf._scale_warnings(D("16.69"), D("167.99"), money="美元", cap_rel_diff=D("0.0427"))
+    assert w and "不可采信" not in w[0]
+    assert "市值" in w[0] and "4.3%" in w[0] and "判断项" in w[0]
+
+
+def test_市值核对不一致时照旧判不可采信():
+    w = dcf._scale_warnings(D("16.69"), D("167.99"), money="美元", cap_rel_diff=D("0.5"))
+    assert w and "不可采信" in w[0]
+
+
+def test_没有市值核对时行为不变():
+    assert "不可采信" in dcf._scale_warnings(D("16.69"), D("167.99"), money="美元")[0]
+
+
+def test_工作簿股数乘现价与账本市值的相对差():
+    from ir_agent.ledger import Fact, FactLedger, Method
+    led = FactLedger()
+    led.put(Fact(key="market_cap", value=D("388000000000"), unit="美元", currency="USD",
+                 period="2026-11-14", as_of=date(2026, 11, 14), source_id="q", method=Method.COMPUTED))
+    rel = dcf._cap_rel_diff(D("2409.4975"), D("167.99"), led, date(2026, 11, 15))
+    assert abs(rel - abs(D("388000000000") - D("2409.4975") * 10**6 * D("167.99"))
+               / (D("2409.4975") * 10**6 * D("167.99"))) < D("1e-9")
+    assert dcf._cap_rel_diff(D("2409.4975"), D("167.99"), FactLedger(), date(2026, 11, 15)) is None

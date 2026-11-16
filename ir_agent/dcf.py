@@ -72,7 +72,27 @@ XCHECK_ITEMS = (
 SCALE_TOL = Decimal(10)
 
 
-def _scale_warnings(ps: Decimal, price: Decimal, money: str = "元") -> list[str]:
+# 工作簿「股数 × 现价」与账本独立来源市值的相对差在此以内，就认定股数与单位没错（摊薄与在外股数本来
+# 就差几个百分点，股权激励多的公司更大）。
+CAP_AGREE_TOL = Decimal("0.15")
+
+
+def _cap_rel_diff(shares_mn: Decimal, price: Decimal, ledger, as_of: date) -> Decimal | None:
+    """工作簿市值（摊薄股数 × 现价）与账本 market_cap（现价 × EDGAR 在外股数）的相对差。
+    账本没有市值时返回 None。现价同源，这项核对检验的是股数与单位 —— 正是量级错位的病因。"""
+    if ledger is None or shares_mn <= 0 or price <= 0:
+        return None
+    caps = [f for (k, _p), fs in getattr(ledger, "_facts", {}).items() if k == "market_cap"
+            for f in fs if f.as_of <= as_of]
+    if not caps:
+        return None
+    cap = max(caps, key=lambda f: (f.period, f.as_of)).value
+    ours = shares_mn * Decimal(10) ** 6 * price
+    return abs(cap - ours) / ours
+
+
+def _scale_warnings(ps: Decimal, price: Decimal, money: str = "元",
+                    cap_rel_diff: Decimal | None = None) -> list[str]:
     """每股内在价值与现价差一个数量级以上 —— 先查数据。
 
     **实测事故（生益科技 600183）。** 取数降级到腾讯通道，那条分支把换手率
@@ -87,6 +107,13 @@ def _scale_warnings(ps: Decimal, price: Decimal, money: str = "元") -> list[str
     r = ps / price
     if r <= SCALE_TOL and r >= 1 / SCALE_TOL:
         return []
+    if cap_rel_diff is not None and cap_rel_diff <= CAP_AGREE_TOL:
+        # PLTR 2026-11-16（用户选 A）：PE 上百倍的标的，DCF 与现价差一个数量级是真结论，不是取数错。
+        # 股数 × 现价已与独立来源市值对上，就不再说「不可采信」，但偏差仍要醒目地说出来。
+        return [f"每股内在价值 {ps:,.2f} {money}与现价 {price:,.2f} {money}相差 {r:,.4g} 倍"
+                f"（超过 {SCALE_TOL} 倍）。股数 × 现价与独立来源市值相差 {cap_rel_diff:.1%}，"
+                "股数与单位无误 —— 偏差来自判断项与市场定价的差距：市场隐含的增长远高于本次"
+                "判断项，或判断项过于保守。请对照市场隐含增速复核判断项，不要把它读成取数错误。"]
     unit_hint = ("在外股数、拆股还原、百万美元口径" if money == "美元" else "总股本、币种、万元/亿元")
     cell = "摊薄股数（百万股）" if money == "美元" else "总股本（亿股）"
     return [f"每股内在价值 {ps:,.2f} {money}与现价 {price:,.2f} {money}相差 "
@@ -120,13 +147,14 @@ def _terminal_warnings(share: Decimal) -> list[str]:
             "（营收增速、资本开支/营收）而不是读这个点估值。"]
 
 
-def _with_scale_check(res: "DcfResult") -> "DcfResult":
+def _with_scale_check(res: "DcfResult", cap_rel_diff: Decimal | None = None) -> "DcfResult":
     """把量级告警插到 warnings 最前面。
 
     排在其它健全性告警前面: 数要是根本不对，后面那些告警都是在给一个错的
     模型体检 —— 与 `_readback_check` 同一条道理。
     """
-    w = _scale_warnings(res.value_per_share, res.price, money=money_unit(res.code))
+    w = _scale_warnings(res.value_per_share, res.price, money=money_unit(res.code),
+                        cap_rel_diff=cap_rel_diff)
     if w:
         res.warnings = w + list(res.warnings)
     return res
@@ -737,7 +765,13 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
     )
     # 量级对账在前、验算失败在后 —— 插入顺序相反，于是验算失败最终排第一。
     # 公式引擎都没跑通是更根本的断言，该排在最前面。
-    res = _with_scale_check(res)
+    cap_rel = None
+    if us:
+        try:
+            cap_rel = _cap_rel_diff(Decimal(str(inp["o"]["摊薄股数（百万股）"])), res.price, ledger, as_of)
+        except (KeyError, ArithmeticError, ValueError):
+            cap_rel = None
+    res = _with_scale_check(res, cap_rel_diff=cap_rel)
     # 终值退化与量级错位同级（都是「不可采信」），排在验算失败之后 ——
     # 公式引擎都没跑通是更根本的断言。
     res.warnings = _terminal_warnings(res.terminal_share) + list(res.warnings)

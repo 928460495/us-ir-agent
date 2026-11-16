@@ -596,7 +596,9 @@ def test_量级对账真的接在run里():
     """
     import inspect
 
-    assert "_with_scale_check(res)" in inspect.getsource(dcf.run)
+    src = inspect.getsource(dcf.run)
+    assert "_with_scale_check(res" in src
+    assert "_cap_rel_diff(" in src            # 市值对账也接上了（PLTR 2026-11-16，用户选 A）
 
 
 # ── 终值占 EV 接近 100% = DCF 已退化成一个终值公式 ────────────────
