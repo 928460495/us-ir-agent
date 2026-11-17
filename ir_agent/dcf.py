@@ -205,6 +205,9 @@ class DcfResult:
     # 加回 SBC 口径的每股价值（美股，验算通过才算）。**只用于与卖方「调整后」口径对账**，主结论用
     # GAAP 口径的 value_per_share（spec 2026-11-16 C；PLTR SBC 约占营收 15%，卖方普遍加回）。
     value_per_share_sbc_addback: Decimal | None = None
+    # 终值 WACC（终值 Beta 向 1，2026-11-16）。终值 ROIC 要与它比，不是与明确期 WACC 比 —— PLTR 研报曾写「终值
+    # ROIC 10.40% 低于 WACC 10.92%，不创造超额价值」，实际终值 WACC 8.40%，ROIC 高出 2%（2026-11-17）。
+    wacc_term: Decimal | None = None
 
     @property
     def upside(self) -> Decimal | None:
@@ -234,6 +237,9 @@ class DcfResult:
         lines.append(f"  WACC [[valuation.wacc{at}]]　终值 ROIC "
                      f"[[valuation.terminal_roic{at}]]　"
                      f"终值占企业价值 [[valuation.terminal_share{at}]]")
+        if self.wacc_term is not None:
+            lines.append(f"  终值 WACC [[valuation.wacc_term{at}]]（终值 Beta 向一收敛；终值 ROIC 应与终值 WACC 比，"
+                         "不是与上面明确期的 WACC 比 —— 高于终值 WACC 即终值期新增投资创造价值）")
         # 期限写中文数字：这一行进研报提示词，照抄阿拉伯数字会被裸数字审计判掉。
         bench = "五年日度对标普 500 回归" if us else "五年对上证综指回归"
         lines.append(f"  WACC 所用 β [[valuation.beta{at}]]（{bench}，Blume 调整）")
@@ -468,6 +474,8 @@ def to_facts(res: DcfResult, as_of: date,
             for k in ("bear", "base", "bull") if k in res.scenario_ps]
     if res.value_per_share_sbc_addback is not None:
         out.append(f("valuation.value_per_share_sbc_addback", res.value_per_share_sbc_addback, money))
+    if res.wacc_term is not None:
+        out.append(f("valuation.wacc_term", res.wacc_term, "ratio"))
     # 蒙特卡洛：键都以 `valuation.` 开头 —— 辩论裁判的可引用清单按这个前缀收
     # （`full._catalog_periods` 的 PROMPT_SIDE），换前缀就会被判成伪造、回写删光。
     m = res.mc
@@ -815,6 +823,7 @@ def run(code: str, out_dir: str | Path, *, as_of: date,
         mc=mc,
         scenario_ps=scenario_ps,
         value_per_share_sbc_addback=(_sbc_addback_ps(str(wb), V) if (us and not fails) else None),
+        wacc_term=(Decimal(str(dv["wacc_term"])) if dv.get("wacc_term") is not None else None),
         warnings=[str(w) for w in warns],
         notes=notes + _asof_note(as_of) + [
             f"行情源 {meta.get('quote_source')}　β {meta.get('beta')}"

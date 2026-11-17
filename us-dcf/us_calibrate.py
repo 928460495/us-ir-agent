@@ -145,6 +145,11 @@ def anchor_interim(itm: dict | None, enabled: bool = True) -> tuple[dict | None,
     return {**itm, **{k: qe[k] for k in ("k", "g_rev", "g_cogs", "est_rev", "est_cogs", "fy_rev", "fy_cogs")}}, None
 
 
+# 历史取几年（与预测年数解耦）。预测期改 10 年后曾用同一个 nyears 取历史 —— PLTR 2020 年才上市，要 2018 年
+# 报表，关键科目缺失拒绝出模型（2026-11-17）。
+HIST_YEARS = 5
+
+
 def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
               stmts: dict | None = None, quote: dict | None = None,
               px: pd.DataFrame | None = None, mkt: pd.DataFrame | None = None,
@@ -164,7 +169,7 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
     meta = meta if meta is not None else D.resolve(symbol)   # 注入时不再直连 SEC
     D.assert_non_financial(meta)
     g = facts if facts is not None else D.facts(meta["cik"])
-    st = stmts if stmts is not None else D.statements(g, meta["ticker"], nyears, splits=splits)
+    st = stmts if stmts is not None else D.statements(g, meta["ticker"], HIST_YEARS, splits=splits)
     inc, bal, cfs, shr = st["income"], st["balance"], st["cashflow"], st["shares"]
     ends = st["ends"]
     last = ends[-1]

@@ -143,3 +143,19 @@ def test_衰减期敏感性各行不同(built):
     import us_breakeven as BE
     rows = BE.fade_sensitivity(built)["rows"]
     assert len({round(r["ps"], 6) for r in rows}) > 1
+
+
+def test_预测十年时历史仍只取五年(monkeypatch):
+    """PLTR 2026-11-17：预测期改 10 年后 calibrate 用同一个 nyears 取历史，去要 2018 年报表（2020 年才上市），
+    拒绝出模型。历史年数与预测年数解耦。"""
+    import us_calibrate as C
+    seen = {}
+
+    def fake_statements(g, ticker, nyears=5, splits=None):
+        seen["hist"] = nyears
+        raise RuntimeError("stop")
+    monkeypatch.setattr(C.D, "statements", fake_statements)
+    monkeypatch.setattr(C.D, "assert_non_financial", lambda meta: None)
+    with pytest.raises(RuntimeError):
+        C.calibrate("PLTR", 10, meta={"ticker": "PLTR", "cik": "1"}, facts={})
+    assert seen["hist"] == C.HIST_YEARS == 5
