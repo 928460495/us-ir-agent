@@ -61,7 +61,8 @@ def test_判断项写入后读回一致_三档分化(stub_cal, tmp_path):
     assert res.verified
     assert not any("没进工作簿" in w or "不一致" in w for w in res.warnings), res.warnings
     assert res.scenario_ps["bull"] > res.scenario_ps["base"] > res.scenario_ps["bear"]
-    assert "首年" in res.anchor_note                         # AAPL 锚定前三季，首年判断项被覆盖
+    # AAPL 锚定前三季：首年判断项本身就取锚定值（spec 2026-11-17），不再有「批准 X → 实际用 Y」
+    assert res.anchor_note == ""
 
 
 def test_三档有一档验算失败时不交出情景价值(stub_cal, tmp_path, monkeypatch):
