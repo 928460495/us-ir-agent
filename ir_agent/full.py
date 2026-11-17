@@ -1006,7 +1006,7 @@ def _load_industry_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     cache = {t: calendarize(b, r.target_ends, as_of) for t, b in books.items()}
     errs: list[str] = []
     try:
-        quotes, qnotes = us_quotes.fetch_peer_quotes(list(books), r.store)
+        quotes, qnotes = us_quotes.fetch_peer_quotes_cached(list(books), r.store, as_of)
     except us_quotes.QuoteUnavailable as e:
         quotes, qnotes = {}, []
         errs.append(f"同业行情（{e}）—— 可比与相对估值将不可用")

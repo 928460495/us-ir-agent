@@ -165,6 +165,44 @@ def fetch_peer_quotes(tickers: list[str], store) -> tuple[dict[str, Quote], list
     return got, notes
 
 
+def _peer_cache_path(store, as_of: date):
+    from pathlib import Path
+    return Path(store.root) / "_cache" / f"peer_quotes_{as_of.isoformat()}.json"
+
+
+def fetch_peer_quotes_cached(tickers: list[str], store, as_of: date) -> tuple[dict[str, Quote], list[str]]:
+    """同业行情按分析时点落盘、后续阶段读回（用户 2026-11-17 选方案 C）。
+
+    IEX 批量只有当天价；第②–④步隔天运行时报价日与本司的分析时点收盘对不上，同业全被剔除。同一分析时点
+    第一次取到的行情（通常是第①步）存进索引，之后读回、不再联网；名单里多出的同业才补取。"""
+    import json
+
+    p = _peer_cache_path(store, as_of)
+    cached: dict[str, Quote] = {}
+    if p.exists():
+        try:
+            for t, v in json.loads(p.read_text(encoding="utf-8")).items():
+                cached[t] = Quote(price=Decimal(v["price"]), as_of=date.fromisoformat(v["as_of"]),
+                                  source=v.get("source", "tiingo_iex"), source_id=v.get("source_id", ""))
+        except (OSError, ValueError, KeyError):
+            cached = {}
+    want = [normalize_ticker(t) for t in tickers]
+    missing = [t for t in want if t not in cached]
+    notes: list[str] = []
+    if cached:
+        notes.append(f"同业行情读回分析时点 {as_of.isoformat()} 首次取数时落盘的 {len(cached)} 只"
+                     "（同一分析时点各阶段用同一份价格）")
+    if missing:
+        got, n2 = fetch_peer_quotes(missing, store)
+        notes += n2
+        cached.update(got)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({t: {"price": str(q.price), "as_of": q.as_of.isoformat(), "source": q.source,
+                                     "source_id": q.source_id} for t, q in cached.items()},
+                                ensure_ascii=False), encoding="utf-8")
+    return {t: cached[t] for t in want if t in cached}, notes
+
+
 def latest_shares(facts: Iterable[Fact], as_of: date) -> tuple[Fact | None, str]:
     """时点内可见的最新一期在外股数（封面数），以及取不到时的原因。
 
