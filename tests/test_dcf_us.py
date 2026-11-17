@@ -202,12 +202,13 @@ def test_指数名标普500不算裸数字():
     assert audit_bare_numbers("营收 500 亿") != []              # 白名单只放过指数名
 
 
-def test_美股调用us_dcf时关闭首年锚定(tmp_path, monkeypatch):
+def test_美股调用us_dcf时打开首年锚定(tmp_path, monkeypatch):
+    """2026-11-17 用户决定：美股与 A 股一样，首年已有季报就锚定（推翻 2026-10-27 的关闭决定）。"""
     seen = _stub_engine(monkeypatch, {"缺失": [], "拆股": []})
     led, ctx = _ctx(tmp_path)
     D_, C_, _, _ = _engine_mods()
     dcf._calibrate_us(D_, C_, "AAPL", AS_OF, led, 5, ctx)
-    assert seen["anchor"] is False
+    assert seen["anchor"] is True
 
 
 def test_批准清单_美股主动不锚定的横幅说明首年判断项直接进模型():
