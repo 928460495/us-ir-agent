@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal as D
 from types import SimpleNamespace
 
@@ -15,7 +15,11 @@ from ir_agent.sources import usaspending
 from ir_agent.sources.snapshot import SnapshotStore
 from ir_agent.sources.usaspending import fetch_contracts
 
-AS_OF = date(2026, 11, 15)
+# 分析时点取相对今天的日期：模块在分析时点早于今天超过 MAX_LAG_DAYS 天时不请求，写死的日期
+# 过几天就让整组测试失败（2026-11-20 实测 14 个）。
+AS_OF = date.today()
+_D = AS_OF.isoformat()
+_Y1 = (AS_OF - timedelta(days=365)).isoformat()
 
 
 class _Resp:
@@ -47,7 +51,7 @@ def test_合计同名承接方的联邦合同义务金额(monkeypatch, tmp_path)
     f = facts[0]
     assert f.key == "gov.contract_obligations_ttm" and f.value == D("2328522416.54")
     assert f.unit == "美元" and f.currency == "USD" and f.method is Method.REPORTED
-    assert f.period == "2026-11-15" and f.as_of == AS_OF
+    assert f.period == _D and f.as_of == AS_OF
     assert store.load(f.source_id).source == "usaspending_recipient"
     assert "PALANTIR USG INC" in notes[0] and "PALANTIRX" not in notes[0]
 
@@ -74,7 +78,7 @@ def test_请求窗口近十二个月且只要合同类(monkeypatch, tmp_path):
     assert url == usaspending.URL
     flt = kw["json"]["filters"]
     assert flt["award_type_codes"] == ["A", "B", "C", "D"]
-    assert flt["time_period"] == [{"start_date": "2025-11-15", "end_date": "2026-11-15"}]
+    assert flt["time_period"] == [{"start_date": _Y1, "end_date": _D}]
     assert kw["json"]["limit"] == 50
 
 
@@ -169,7 +173,7 @@ def test_外部资料加载器写入联邦合同_公司名取不到时不请求(
 
     calls = _stub(monkeypatch, [{"name": "PALANTIR USG INC", "amount": 3}])
     r, notes = run({"fiscalYearEnd": "1231", "name": "Palantir Technologies Inc."})
-    assert r.ledger.get("gov.contract_obligations_ttm", "2026-11-15", AS_OF).value == D(3)
+    assert r.ledger.get("gov.contract_obligations_ttm", _D, AS_OF).value == D(3)
     assert "PALANTIR USG INC" in notes and len(calls) == 1
     r, notes = run({"fiscalYearEnd": "1231"})
     assert len(calls) == 1 and "USAspending" in notes
