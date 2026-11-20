@@ -311,6 +311,71 @@ TAGS_SHARES = {
 }
 
 
+# ---------- 自营金融应收款与受限现金（spec 2026-11-20-nonop-financial-assets）----------
+# 福特 2025：NotesAndLoansReceivableNet 当期 491 亿 + 非当期 614 亿美元（占资产 38%）此前被倒挤进「其他流动 /
+# 非流动资产」随营收增长扣自由现金流，而 Ford Credit 的融资债务已在净负债中扣除 —— 双重低估。
+CAPTIVE_FIN_MIN_SHARE = 0.10        # 金融应收款占资产 ≥ 10% 才判为自营金融（普通公司的少量应收票据是经营性的）
+FIN_REC_CUR = ["NotesAndLoansReceivableNetCurrent",
+               "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLossCurrent"]
+FIN_REC_NC = ["NotesAndLoansReceivableNetNoncurrent",
+              "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLossNoncurrent"]
+CASH_PLAIN = ["CashAndCashEquivalentsAtCarryingValue"]
+CASH_COMBINED = ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]
+RESTRICTED = ["RestrictedCashAndCashEquivalentsAtCarryingValue", "RestrictedCashAndCashEquivalents",
+              "RestrictedCashCurrent"]
+
+
+def _restricted_cash(g: dict, bal: pd.DataFrame, ends: list[str], diag: dict) -> None:
+    """现金只申报了「含受限现金」的合并口径时，扣除可识别的受限现金（投行实务：受限现金不计入净现金）。
+    必须在倒挤之前调用 —— 扣掉的部分由倒挤落进「其他流动资产」，恒等不变。"""
+    if "现金及等价物" not in bal.columns:
+        return
+    plain = series(g, CASH_PLAIN, duration=False)
+    comb = series(g, CASH_COMBINED, duration=False)
+    restr = series(g, RESTRICTED, duration=False)
+    hit = []
+    for e in ends:
+        if e in plain or e not in comb or not restr.get(e):
+            continue
+        if abs(float(bal.at[e, "现金及等价物"]) - comb[e]) > 1e-6:
+            continue                     # 现金不是取自合并口径，不重复扣
+        bal.at[e, "现金及等价物"] = float(bal.at[e, "现金及等价物"]) - restr[e]
+        hit.append(f"{e} {restr[e]:,.0f}")
+    if hit:
+        diag.setdefault("推导", []).append("现金只申报了含受限现金的口径：扣除受限现金（百万美元）" + "、".join(hit))
+
+
+def _captive_fin(g: dict, bal: pd.DataFrame, inc: pd.DataFrame, ends: list[str], diag: dict) -> None:
+    """自营金融应收款（标准标签）占资产 ≥ 10%：历年都从倒挤的「其他流动 / 非流动资产」移出，按账面并入
+    「短期投资」—— 该格预测期持有不变、不进营运资本，净负债已减去它（= 按账面加回，与已扣除的融资债务相抵）。
+    GM、DE 等用公司自定义标签、companyfacts 取不到：按「购买金融应收款」现金流提示人工核对，不猜数。"""
+    cur = series(g, FIN_REC_CUR, duration=False)
+    nc = series(g, FIN_REC_NC, duration=False)
+    last = ends[-1]
+    fr_last = cur.get(last, 0.0) + nc.get(last, 0.0)
+    ta = float(bal.at[last, "资产总计"]) if "资产总计" in bal.columns else 0.0
+    plugs = {"其他流动资产", "其他非流动资产", "短期投资"} <= set(bal.columns)
+    if fr_last and ta and fr_last >= CAPTIVE_FIN_MIN_SHARE * ta and plugs:
+        for e in ends:
+            c, n = cur.get(e, 0.0), nc.get(e, 0.0)
+            bal.at[e, "其他流动资产"] = float(bal.at[e, "其他流动资产"]) - c
+            bal.at[e, "其他非流动资产"] = float(bal.at[e, "其他非流动资产"]) - n
+            sti = bal.at[e, "短期投资"]
+            bal.at[e, "短期投资"] = (0.0 if pd.isna(sti) else float(sti)) + c + n
+        diag.setdefault("非经营金融资产", []).append(
+            f"自营金融应收款 {fr_last:,.0f} 百万美元（占资产 {fr_last / ta:.0%}）按账面并入短期投资：预测期持有不变、"
+            "不进营运资本；其融资债务已在净负债中扣除，两者相抵 = 按账面净值估金融子公司")
+        return
+    if fr_last:
+        return                           # 低于阈值：经营性，留在倒挤项里
+    buy = series(g, ["PaymentsToAcquireFinanceReceivables"], duration=True)
+    rev = float(inc.at[last, "营业收入"]) if "营业收入" in inc.columns and not pd.isna(inc.at[last, "营业收入"]) else 0.0
+    if buy.get(last) and rev and buy[last] >= CAPTIVE_FIN_MIN_SHARE * rev:
+        diag.setdefault("警告", []).append(
+            f"疑似有自营金融业务（购买金融应收款 {buy[last]:,.0f} 百万美元，占营收 {buy[last] / rev:.0%}），但金融应收款"
+            "用公司自定义标签、companyfacts 取不到 —— 未从营运资本剔除，估值可能低估，请人工核对")
+
+
 def _derive_bs(bal: pd.DataFrame, diag: dict) -> None:
     """把四个「其他」科目改成【倒挤项】，让资产负债表按构造恒等。
 
@@ -476,7 +541,9 @@ def statements(g: dict, ticker: str, nyears: int = 5, splits: list | None = None
     cfs = build(TAGS_CF, True)
     _derive_da(cfs, diag, fmp_cashflow_da(ticker, ends))
     _fill_cogs_from_fmp(inc, ticker, ends, diag)
+    _restricted_cash(g, bal, ends, diag)           # 倒挤之前：扣掉的受限现金由倒挤吸收，恒等不变
     _derive_bs(bal, diag)                          # 内含小计推导 + 倒挤 + 异动警告
+    _captive_fin(g, bal, inc, ends, diag)          # 倒挤之后：自营金融应收款移出营运资本
     assert_complete(inc, bal, cfs, ends, diag)     # 关键科目缺期 → 硬失败
     shr = build(TAGS_SHARES, True, scale=MN, splits=sp)   # 股数按拆股还原，单位百万股
     return dict(income=inc, balance=bal, cashflow=cfs, shares=shr, ends=ends, diag=diag)
