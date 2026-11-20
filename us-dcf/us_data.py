@@ -354,17 +354,14 @@ def _captive_fin(g: dict, bal: pd.DataFrame, inc: pd.DataFrame, ends: list[str],
     last = ends[-1]
     fr_last = cur.get(last, 0.0) + nc.get(last, 0.0)
     ta = float(bal.at[last, "资产总计"]) if "资产总计" in bal.columns else 0.0
-    plugs = {"其他流动资产", "其他非流动资产", "短期投资"} <= set(bal.columns)
-    if fr_last and ta and fr_last >= CAPTIVE_FIN_MIN_SHARE * ta and plugs:
-        for e in ends:
-            c, n = cur.get(e, 0.0), nc.get(e, 0.0)
-            bal.at[e, "其他流动资产"] = float(bal.at[e, "其他流动资产"]) - c
-            bal.at[e, "其他非流动资产"] = float(bal.at[e, "其他非流动资产"]) - n
-            sti = bal.at[e, "短期投资"]
-            bal.at[e, "短期投资"] = (0.0 if pd.isna(sti) else float(sti)) + c + n
-        diag.setdefault("非经营金融资产", []).append(
-            f"自营金融应收款 {fr_last:,.0f} 百万美元（占资产 {fr_last / ta:.0%}）按账面并入短期投资：预测期持有不变、"
-            "不进营运资本；其融资债务已在净负债中扣除，两者相抵 = 按账面净值估金融子公司")
+    if fr_last and ta and fr_last >= CAPTIVE_FIN_MIN_SHARE * ta:
+        # 终审 I1/I2（2026-11-20 裁定）：金融子公司的收入与融资成本在经营利润里、融资债务在净负债里。把应收款按
+        # 账面并入短期投资会与 EBIT 里的金融利润重复计算，还会额外计现金收益；正确处理要分部数据把三者拆开，
+        # companyfacts 做不到 —— 只识别、提示，不改报表。
+        diag.setdefault("警告", []).append(
+            f"自营金融业务：金融应收款 {fr_last:,.0f} 百万美元（占资产 {fr_last / ta:.0%}）随营收增长计入营运资本，"
+            "其收入与融资成本在经营利润里、融资债务在净负债里 —— 应按分部单独估值（金融子公司按股权价值），本模型"
+            "未拆分，偏差方向取决于金融业务的利润与债务结构，请人工核对")
         return
     if fr_last:
         return                           # 低于阈值：经营性，留在倒挤项里

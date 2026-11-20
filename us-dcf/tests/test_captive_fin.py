@@ -39,15 +39,18 @@ def _inc(rev=(176000.0, 185000.0)):
     return pd.DataFrame({"营业收入": list(rev)}, index=ENDS)
 
 
-def test_福特式自营金融_并入短期投资且移出营运资本():
+def test_福特式自营金融_识别并提示_不改估值():
+    """终审 I1/I2（2026-11-20 裁定）：福特金融子公司的收入与融资成本在经营利润里、融资债务在净负债里；
+    把应收款按账面并入短期投资会与 EBIT 里的金融利润重复计算，还会额外计现金收益。正确处理要分部数据，
+    companyfacts 做不到 —— 只识别、提示，不改报表。"""
     g = _inst({"NotesAndLoansReceivableNetCurrent": [47000, 49130],
                "NotesAndLoansReceivableNetNoncurrent": [59000, 61449]})
     bal, diag = _bal(), {}
+    before = bal.copy()
     D._captive_fin(g, bal, _inc(), ENDS, diag)
-    assert bal.at["2025-12-31", "短期投资"] == pytest.approx(18000 + 49130 + 61449)
-    assert bal.at["2025-12-31", "其他流动资产"] == pytest.approx(65000 - 49130)
-    assert bal.at["2024-12-31", "其他非流动资产"] == pytest.approx(70000 - 59000)       # 历年同口径
-    assert any("自营金融" in x for x in diag["非经营金融资产"])
+    pd.testing.assert_frame_equal(bal, before)
+    w = " ".join(diag["警告"])
+    assert "自营金融" in w and "110,579" in w and "分部" in w and "人工核对" in w
 
 
 def test_低于阈值视为经营性_不动():
