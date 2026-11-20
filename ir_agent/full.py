@@ -221,7 +221,9 @@ def _dcf_kw(r) -> dict:
     from ir_agent.market import is_us
 
     if not is_us(getattr(r, "code", "") or "000000"):
-        return {}
+        # A 股：年报网址 —— 估值层读附注判定非经营性金融资产（spec 2026-11-20-nonop-financial-assets）
+        url = getattr(r, "annual_url", "") or ""
+        return {"annual_url": url} if url else {}
     m = r.sec_meta or {}
     return {"us_ctx": {"store": r.store, "companyfacts_sid": m.get("companyfacts_sid"),
                        "submissions_sid": m.get("submissions_sid"), "fye": m.get("fye", "")}}
