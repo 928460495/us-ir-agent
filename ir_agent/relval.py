@@ -38,6 +38,16 @@ TRIM = (5, 95)              # 因变量两端各剔 5%
 REG_SPEC = {"pb_roe": ("roe", "pb", "PB 对 ROE"),
             "pe_growth": ("growth", "pe", "PE 对增速")}
 
+# 倍数 → 理论驱动（spec 2026-11-21 §1；Damodaran 的伴随变量）。挑可比、做回归都按这张表，全行业同一规则。
+# ROE 一律用三年平均（跨周期口径，不判定是不是周期股）；EV 类倍数看 EBITDA 利润率（可为负）。
+DRIVERS: dict[str, tuple[str, ...]] = {
+    "pe": ("growth", "roe3y"),
+    "pe_ntm": ("growth", "roe3y"),
+    "pb": ("roe3y", "growth"),
+    "ev_ebitda": ("ebitda_margin", "growth"),
+    "ev_sales": ("ebitda_margin", "growth"),
+}
+
 
 @dataclass
 class PeerObs:
@@ -66,6 +76,11 @@ class PeerObs:
     eps_ntm: Decimal | None = None
     ntm_basis: str = ""
     lags: dict[str, str] = field(default_factory=dict)
+    # 基本面驱动（spec 2026-11-21）：近三个年报 ROE 的平均（不足三年按实有年数，basis 写「2y」等）、
+    # TTM EBITDA ÷ TTM 营收
+    roe3y: Decimal | None = None
+    roe3y_basis: str = ""
+    ebitda_margin: Decimal | None = None
 
     @property
     def minority(self) -> Decimal | None:

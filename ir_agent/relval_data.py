@@ -207,6 +207,24 @@ def _growth(led: FactLedger, period: str, as_of: date,
     return None, ""
 
 
+ROE_YEARS = 3
+
+
+def _roe3y(led: FactLedger, period: str, as_of: date) -> tuple[Decimal | None, str]:
+    """近三个年报（截至 period）的 ROE 平均 = 各年归母净利润 ÷ 年末归母净资产。
+
+    净资产不为正、或该年数据缺失的年份跳过；一年都没有给 None。basis 写实有年数（「3y」「2y」）。"""
+    y = int(period[:4])
+    vals = []
+    for yy in range(y, y - ROE_YEARS, -1):
+        np_, eq = (_v(led, k, f"{yy}FY", as_of) for k in ("net_profit_attr_parent", "equity_attr_parent"))
+        if np_ is not None and eq is not None and eq > 0:
+            vals.append(np_ / eq)
+    if not vals:
+        return None, ""
+    return sum(vals, Decimal(0)) / len(vals), f"{len(vals)}y"
+
+
 def obs_from_ledger(code: str, name: str, led: FactLedger, period: str,
                     as_of: date, market_cap: Decimal,
                     np_ttm: tuple[Decimal, str] | None = None,
@@ -253,13 +271,17 @@ def obs_from_ledger(code: str, name: str, led: FactLedger, period: str,
     equity_parent = bv("equity_attr_parent")
     roe = (net_profit / equity_parent
            if net_profit is not None and equity_parent and equity_parent > 0 else None)
+    roe3y, roe3y_basis = _roe3y(led, period, as_of)
+    ebitda = eb[0] if eb else None
+    margin = ebitda / revenue if ebitda is not None and revenue and revenue > 0 else None
     return PeerObs(code=code, name=name, market_cap=market_cap,
                    net_profit=net_profit, np_basis=basis,
                    equity_parent=equity_parent, total_equity=bv("total_equity"),
                    debt=debt, cash=bv("cash_and_equivalents"),
                    ebitda=eb[0] if eb else None, roe=roe,
                    growth=growth, growth_basis=gbasis,
-                   bs_basis=bs, flow_basis=eb[1] if eb else "", revenue=revenue)
+                   bs_basis=bs, flow_basis=eb[1] if eb else "", revenue=revenue,
+                   roe3y=roe3y, roe3y_basis=roe3y_basis, ebitda_margin=margin)
 
 
 def obs_from_facts(code: str, name: str, facts: dict, period: str,
