@@ -190,10 +190,8 @@ _DRV_CN = {"growth": "营收增速", "roe3y": "三年平均 ROE", "ebitda_margin
 
 
 def kinds_for(target: PeerObs, us: bool) -> tuple[str, ...]:
-    """本次要算的倍数。A 股不变；美股加 PE(NTM)，本司 TTM 归母净利润不为正时再加 EV/Sales
-    （设计「亏损公司加用」—— 盈利公司的 EV/Sales 不看利润率，拿来比反而误导）。"""
-    if not us:
-        return KINDS
+    """本次要算的倍数。两个市场同一规则（spec 2026-11-21 §4）：PE 同时给 TTM 与 NTM；本司 TTM
+    归母净利润不为正时再加 EV/Sales（盈利公司的 EV/Sales 不看利润率，拿来比反而误导）。"""
     return tuple(k for k in US_KINDS if k != "ev_sales" or not _pos(target.net_profit))
 
 

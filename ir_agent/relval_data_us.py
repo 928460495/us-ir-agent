@@ -19,26 +19,9 @@ from decimal import Decimal
 
 from ir_agent.ledger import FactLedger, LookAheadError
 from ir_agent.relval import PeerObs
+from ir_agent.relval_ntm import ntm_eps  # noqa: F401  （旧入口，测试与调用方仍从这里取）
 from ir_agent.relval_data import (_Q_OF, RelvalUnavailable, _label, _prepare, balance_period,
                                   flow_end, flow_ttm, fund_period, obs_from_ledger)
-
-
-def ntm_eps(cons, fye_mmdd: str, as_of: date) -> tuple[Decimal, str] | None:
-    """NTM EPS = w × E[本财年] + (1 − w) × E[下一财年]，w = 本财年剩余天数 ÷ 365（截到 0–1）。
-    缺任一财年的预期返回 None —— 拿一个财年顶两个会把 NTM 说成 FY。"""
-    from ir_agent.sources.us_periods import _nominal_fye, _parse_fye, fiscal_year
-
-    if cons is None or not getattr(cons, "eps", None):
-        return None
-    fy0 = fiscal_year(as_of, fye_mmdd)
-    e0, e1 = cons.eps.get(fy0), cons.eps.get(fy0 + 1)
-    if e0 is None or e1 is None:
-        return None
-    m, d = _parse_fye(fye_mmdd)
-    days = (_nominal_fye(fy0, m, d) - as_of).days
-    w = min(max(Decimal(days) / Decimal(365), Decimal(0)), Decimal(1))
-    v = w * e0.median + (1 - w) * e1.median
-    return v, f"NTM：FY{fy0} × {w:.3f} + FY{fy0 + 1} × {1 - w:.3f}（{cons.stat or '均值'}，FMP）"
 
 
 def _visible(facts, key: str, as_of: date) -> set[str]:
@@ -177,3 +160,18 @@ def gather_us(r, as_of: date, snapshot_dir) -> tuple[PeerObs, list[PeerObs], lis
     notes += list(getattr(r, "peer_notes", None) or [])
     comps = [by_code[c] for c in comps_codes if c in by_code]
     return target, sample, comps, mc.value / price, price, notes
+
+
+def peer_ntm_us(codes, r, as_of: date) -> dict[str, tuple[Decimal, str]]:
+    """PE(NTM) 可比（沿用 PE 选中的名单）的一致预期。FMP 逐只请求，只问给定的几家。"""
+    books = getattr(r, "peer_books", None) or {}
+    store = getattr(r, "store", None)
+    out: dict[str, tuple[Decimal, str]] = {}
+    for c in codes:
+        b = books.get(c)
+        if b is None:
+            continue
+        v, basis = _ntm_for(c, b.fye, as_of, store)
+        if v is not None:
+            out[c] = (v, basis)
+    return out

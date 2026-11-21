@@ -413,6 +413,7 @@ def gather(r, as_of: date, snapshot_dir):
         o = obs_from_facts(c, name, cache[c], fp, q["market_cap"], as_of,
                            ttm_end=ttm_end, bs_period=tgt_bs, flow_end=tgt_flow)
         o.path = paths.get(c, ())
+        o.price = q.get("last")                 # PE(NTM) 用每股口径（与本司报价日同一天）
         sample.append(o)
 
     if len(closes) != n_cached:
@@ -431,6 +432,11 @@ def gather(r, as_of: date, snapshot_dir):
                              bs_period=tgt_bs, flow_end_q=tgt_flow)
     tpath = getattr(peers.classification, "path", "") or ""
     target.path = tuple(x for x in str(tpath).split("-") if x)
+    from ir_agent.relval_ntm import CN_FYE, ntm_from_ledger
+    target.price = price
+    got = ntm_from_ledger(r.ledger, CN_FYE, as_of)
+    if got is not None:
+        target.eps_ntm, target.ntm_basis = got
 
     by_code = {o.code: o for o in sample}
     comps_codes = getattr(r, "comps_codes", None) or []
@@ -438,3 +444,48 @@ def gather(r, as_of: date, snapshot_dir):
               for c in comps_codes if c not in by_code]
     comps = [by_code[c] for c in comps_codes if c in by_code]
     return target, sample, comps, mc_fact.value / price, price, notes
+
+
+def peer_ntm(codes, as_of: date, snapshot_dir) -> dict[str, tuple[Decimal, str]]:
+    """PE(NTM) 可比（沿用 PE 选中的名单）的一致预期：东财研报按分析时点检索、取中位数，财年末 12-31。
+
+    只问给定的几家（有界）。结果按分析时点落快照 `peer_consensus_<日期>.json`（{代码: {年: EPS} 或
+    null}），重跑同一时点直接读快照、不再请求 —— 研报列表会随时间增长，重取可能不是同一批。
+    缺本年或下一年预期的公司不返回。"""
+    import json
+    from pathlib import Path
+
+    from ir_agent.relval_ntm import CN_FYE, ntm_eps
+    from ir_agent.sources import reports
+
+    path = Path(snapshot_dir) / f"peer_consensus_{as_of.isoformat()}.json" if snapshot_dir else None
+    try:
+        cache = json.loads(path.read_text("utf-8")) if path else {}
+    except (OSError, ValueError):
+        cache = {}
+    changed = False
+    out: dict[str, tuple[Decimal, str]] = {}
+    for c in codes:
+        if c not in cache:
+            try:
+                cons = reports.consensus(reports.search(as_of=as_of, code=c), as_of)
+                cache[c] = {str(y): str(e.median) for y, e in cons.eps.items()} or None
+            except Exception:                               # noqa: BLE001
+                cache[c] = None
+            changed = True
+        eps = cache.get(c)
+        if not eps:
+            continue
+        from types import SimpleNamespace
+        cons = SimpleNamespace(eps={int(y): SimpleNamespace(median=Decimal(v)) for y, v in eps.items()},
+                               stat="中位")
+        got = ntm_eps(cons, CN_FYE, as_of, source="东财研报")
+        if got is not None:
+            out[c] = got
+    if changed and path is not None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(cache, ensure_ascii=False, indent=1), "utf-8")
+        except OSError:
+            pass
+    return out

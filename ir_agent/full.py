@@ -3687,7 +3687,29 @@ def _relative_valuation(code, r, as_of: date, dcf_res, snapshot_dir):
         by_kind: dict = {}
         selection: dict = {}
         sel_notes: list[str] = []
+        ntm_short = False
         for k in kinds:
+            if k == "pe_ntm":
+                # 预期 PE 的可比沿用 PE 选中的名单（驱动相同），只对这几家取一致预期（有界）
+                base = by_kind.get("pe") or comps
+                if not relval._target_metric_ok("pe_ntm", tgt):
+                    by_kind[k] = []
+                    continue
+                fill = (relval_data_us.peer_ntm_us(
+                    [p.code for p in base if p.eps_ntm is None], r, as_of) if us else
+                    relval_data.peer_ntm([p.code for p in base if p.eps_ntm is None], as_of, snapshot_dir))
+                for p in base:
+                    if p.code in fill:
+                        p.eps_ntm, p.ntm_basis = fill[p.code]
+                kept = [p for p in base if p.eps_ntm is not None and p.price]
+                by_kind[k] = kept
+                selection[k] = [row for row in selection.get("pe", []) if row[0] in {p.code for p in kept}]
+                if len(kept) < relval.MIN_BAND:
+                    ntm_short = True
+                    sel_notes.append("PE(NTM)：一致预期覆盖不足（PE 可比中有本年与下一年预期的不足四家），不适用")
+                else:
+                    sel_notes.append("PE(NTM)：沿用 PE 的可比名单，只保留有一致预期的公司")
+                continue
             picked, rows, note = relval.select_by_drivers(k, sample, tgt)
             if picked:
                 by_kind[k], selection[k] = picked, rows
@@ -3696,6 +3718,8 @@ def _relative_valuation(code, r, as_of: date, dcf_res, snapshot_dir):
                 by_kind[k] = comps
                 sel_notes.append(f"{note}，退回按市值近邻名单")
         bands, cnotes = relval.comps_bands(comps, tgt, shares, kinds=kinds, comps_by_kind=by_kind)
+        if ntm_short:
+            cnotes = [n for n in cnotes if not (n.startswith("PE(NTM)") and "不足四家" in n)]
         regs = {k: relval.regress(k, sample, tgt, shares) for k in relval.REG_SPEC}
         res = relval.RelvalResult(
             as_of=as_of, price=price, shares=shares, target=tgt, comps=bands,

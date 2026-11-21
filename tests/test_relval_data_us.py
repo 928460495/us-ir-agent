@@ -170,3 +170,10 @@ def test_美股取数SIC带进观测作业务路径(r, cons):
     tgt, sample, *_ = gather_us(r, AS_OF, None)
     assert tgt.path == ("3571",)
     assert {o.code: o.path for o in sample}["DELL"] == ("3572",)
+
+
+def test_美股预期PE可比只请求给定几家(r, cons):
+    from ir_agent.relval_data_us import peer_ntm_us
+
+    got = peer_ntm_us(["P3", "P4"], r, AS_OF)
+    assert set(got) == {"P3", "P4"} and cons == ["P3", "P4"]

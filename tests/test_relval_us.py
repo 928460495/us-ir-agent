@@ -16,8 +16,10 @@ def test_增速口径TTM三年复合不被判成一年():
     assert "一年" not in r.why and "口径" not in r.why
 
 
-def test_A股倍数种类不变():
-    assert kinds_for(_tgt(), us=False) == KINDS == ("pe", "pb", "ev_ebitda")
+def test_A股与美股倍数种类同一规则():
+    """spec 2026-11-21 §4：A 股补齐预期 PE 与亏损公司的 EV/Sales，与美股同一规则。"""
+    assert kinds_for(_tgt(net_profit=D(5)), us=False) == kinds_for(_tgt(net_profit=D(5)), us=True)
+    assert KINDS == ("pe", "pb", "ev_ebitda")
 
 
 def test_美股盈利公司不加EV_Sales():
