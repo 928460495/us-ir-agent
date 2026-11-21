@@ -3720,7 +3720,12 @@ def _relative_valuation(code, r, as_of: date, dcf_res, snapshot_dir):
         bands, cnotes = relval.comps_bands(comps, tgt, shares, kinds=kinds, comps_by_kind=by_kind)
         if ntm_short:
             cnotes = [n for n in cnotes if not (n.startswith("PE(NTM)") and "不足四家" in n)]
-        regs = {k: relval.regress(k, sample, tgt, shares) for k in relval.REG_SPEC}
+        # 回归样本不足十五家：A 股有界扩到申万二级（只用于回归，不进可比名单）
+        extra, xnotes, xlabel = relval_data.expand_sample(r, as_of, snapshot_dir, tgt, sample)
+        notes = list(notes) + xnotes
+        regs = {k: relval.regress(k, sample + extra, tgt, shares) for k in relval.REG_SPEC}
+        for g in regs.values():
+            g.expanded = xlabel if extra else ""
         res = relval.RelvalResult(
             as_of=as_of, price=price, shares=shares, target=tgt, comps=bands,
             comps_notes=sel_notes + cnotes, regs=regs, sample_size=len(sample),

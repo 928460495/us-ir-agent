@@ -332,45 +332,12 @@ def _close_on(symbol: str, day: date, cache: dict) -> tuple[date, Decimal]:
     return date.fromisoformat(d), Decimal(px)
 
 
-def gather(r, as_of: date, snapshot_dir):
-    """返回 (本司, 行业样本, 可比, 总股本, 现价, 剔除说明)。
-
-    可比 = 行业样本中 `r.comps_codes` 那几家 —— **同一份观测**，保证可比法与回归同口径。
-    截至 as_of 尚无该期财报的同业剔除，不用上期凑（与 comps.py 的立场一致）。
-    **没进样本的每一家都留一条说明**：财报没取到、没有行情、行情停在旧日期、未披露。
-    """
-    from ir_agent.operators import aggregates
+def _build_sample(codes, names, paths, cache, ctx, notes) -> list[PeerObs]:
+    """批量行情 → 逐家观测（与本司同一报价日、同一截止期）。没进样本的每一家都在 notes 留一条。"""
     from ir_agent.sources.snapshot import SnapshotStore
 
-    cache = getattr(r, "peer_statements", None)
-    peers = getattr(r, "peer_set", None)
-    if not cache or peers is None:
-        raise RelvalUnavailable("行业样本未取到（第二阶段行业聚合失败或未运行）")
-    fp = fund_period(r.period)
-    tcode = peers.target
-    names = {m.code: m.name for m in peers.members}
-    paths = {m.code: tuple(getattr(m, "path", ()) or ()) for m in peers.members}
-    notes: list[str] = [f"{m.code} {m.name}：财报未取到（行业聚合时取数失败），剔除"
-                        for m in peers.members if m.code not in cache]
-    codes = [c for c in cache if c != tcode]
-
-    spot = next((f.period for f in (r.quotes.facts if r.quotes else [])
-                 if f.key == "market_cap"), None)
-    try:
-        mc_fact = r.ledger.get("market_cap", spot, as_of=as_of) if spot else None
-    except (KeyError, LookAheadError):
-        mc_fact = None
-    price = _v(r.ledger, "last_price", spot, as_of) if spot else None
-    if mc_fact is None or not mc_fact.value or not price:
-        raise RelvalUnavailable("本司市值或现价缺失")
-    quote_day = mc_fact.as_of
-    # 本司 PE 分母的截止季度 —— 同业对齐它（没出就退上一季）
-    from ir_agent.operators.ttm import latest_quarter
-    ttm_end = latest_quarter(r.ledger, "net_profit_attr_parent", as_of)
-    # 存量与流量的截止期同样由本司定，同业对齐（没出则退一期）
-    tgt_bs = balance_period(r.ledger, as_of)
-    tgt_flow = flow_end(r.ledger, as_of)
-
+    quote_day, fp, as_of = ctx["quote_day"], ctx["fp"], ctx["as_of"]
+    snapshot_dir = ctx["snapshot_dir"]
     symbols = [quote_symbol(c) for c in codes]
     try:
         got, raws = fetch_quotes(symbols)
@@ -411,7 +378,7 @@ def gather(r, as_of: date, snapshot_dir):
             notes.append(f"{c} {name}：截至估值时点未披露 {fp} 财报，剔除（不用上期凑）")
             continue
         o = obs_from_facts(c, name, cache[c], fp, q["market_cap"], as_of,
-                           ttm_end=ttm_end, bs_period=tgt_bs, flow_end=tgt_flow)
+                           ttm_end=ctx["ttm_end"], bs_period=ctx["tgt_bs"], flow_end=ctx["tgt_flow"])
         o.path = paths.get(c, ())
         o.price = q.get("last")                 # PE(NTM) 用每股口径（与本司报价日同一天）
         sample.append(o)
@@ -423,6 +390,50 @@ def gather(r, as_of: date, snapshot_dir):
             close_path.write_text(json.dumps(closes, ensure_ascii=False, indent=1), "utf-8")
         except OSError:
             pass
+    return sample
+
+
+def gather(r, as_of: date, snapshot_dir):
+    """返回 (本司, 行业样本, 可比, 总股本, 现价, 剔除说明)。
+
+    可比 = 行业样本中 `r.comps_codes` 那几家 —— **同一份观测**，保证可比法与回归同口径。
+    截至 as_of 尚无该期财报的同业剔除，不用上期凑（与 comps.py 的立场一致）。
+    **没进样本的每一家都留一条说明**：财报没取到、没有行情、行情停在旧日期、未披露。
+    """
+    from ir_agent.operators import aggregates
+
+    cache = getattr(r, "peer_statements", None)
+    peers = getattr(r, "peer_set", None)
+    if not cache or peers is None:
+        raise RelvalUnavailable("行业样本未取到（第二阶段行业聚合失败或未运行）")
+    fp = fund_period(r.period)
+    tcode = peers.target
+    names = {m.code: m.name for m in peers.members}
+    paths = {m.code: tuple(getattr(m, "path", ()) or ()) for m in peers.members}
+    notes: list[str] = [f"{m.code} {m.name}：财报未取到（行业聚合时取数失败），剔除"
+                        for m in peers.members if m.code not in cache]
+    codes = [c for c in cache if c != tcode]
+
+    spot = next((f.period for f in (r.quotes.facts if r.quotes else [])
+                 if f.key == "market_cap"), None)
+    try:
+        mc_fact = r.ledger.get("market_cap", spot, as_of=as_of) if spot else None
+    except (KeyError, LookAheadError):
+        mc_fact = None
+    price = _v(r.ledger, "last_price", spot, as_of) if spot else None
+    if mc_fact is None or not mc_fact.value or not price:
+        raise RelvalUnavailable("本司市值或现价缺失")
+    quote_day = mc_fact.as_of
+    # 本司 PE 分母的截止季度 —— 同业对齐它（没出就退上一季）
+    from ir_agent.operators.ttm import latest_quarter
+    ttm_end = latest_quarter(r.ledger, "net_profit_attr_parent", as_of)
+    # 存量与流量的截止期同样由本司定，同业对齐（没出则退一期）
+    tgt_bs = balance_period(r.ledger, as_of)
+    tgt_flow = flow_end(r.ledger, as_of)
+
+    ctx = dict(quote_day=quote_day, fp=fp, as_of=as_of, ttm_end=ttm_end, tgt_bs=tgt_bs,
+               tgt_flow=tgt_flow, snapshot_dir=snapshot_dir)
+    sample = _build_sample(codes, names, paths, cache, ctx, notes)
 
     try:
         aggregates.compute(r.ledger, fp, as_of)
@@ -489,3 +500,65 @@ def peer_ntm(codes, as_of: date, snapshot_dir) -> dict[str, tuple[Decimal, str]]
         except OSError:
             pass
     return out
+
+
+def expand_sample(r, as_of: date, snapshot_dir, target: PeerObs, sample: list[PeerObs], *,
+                  taxonomy=None, fetch=None) -> tuple[list[PeerObs], list[str], str]:
+    """回归样本不足十五家时**有界**扩大（spec 2026-11-21 §5）：A 股从申万三级扩到二级，不突破
+    二级底线（`Taxonomy.widen` 的 floor）；美股样本本就是整个 FF49，不扩。新增公司最多补到
+    `REG_EXPAND_CAP` 家，财报逐家取（东财，失败的跳过）。只用于回归，不进可比名单。
+
+    返回（新增观测，页面说明，扩到的层级名）。**任何失败都不抛出** —— 回归照原样本做，如实写明。"""
+    from ir_agent import relval
+    from ir_agent.market import is_us
+
+    if is_us(target.code) or len(sample) >= relval.MIN_REG_N:
+        return [], [], ""
+    peers = getattr(r, "peer_set", None)
+    cls = getattr(peers, "classification", None)
+    level = getattr(cls, "level", None)
+    if not isinstance(level, int):
+        return [], [], ""
+    if level <= 2:
+        return [], ["回归扩样本：当前样本已是申万二级，不再扩大（分类底线）"], ""
+    notes: list[str] = []
+    try:
+        from ir_agent.sources.taxonomy import Taxonomy
+        tax = taxonomy or Taxonomy.load()
+        raw, new_level, used, _thin = tax.widen(peers.target, min_peers=relval.MIN_REG_N)
+        if new_level >= level:
+            return [], [], ""
+        have = {o.code for o in sample} | {peers.target} | set(getattr(r, "peer_statements", {}) or {})
+        new = [e for e in raw if e.code not in have and "退市" not in e.name]
+        room = max(relval.REG_EXPAND_CAP - len(sample), 0)
+        if len(new) > room:
+            notes.append(f"回归扩样本：申万二级「{used}」新增 {len(new)} 家，超过上限，只取前 {room} 家")
+            new = new[:room]
+        if fetch is None:
+            from ir_agent.market import market_of
+            from ir_agent.sources.eastmoney import fetch_statements_em
+
+            def fetch(c):
+                return fetch_statements_em(c, market=market_of(c))[0]
+        cache: dict[str, dict] = {}
+        for e in new:
+            try:
+                cache[e.code] = {(f.key, f.period): f for f in fetch(e.code)}
+            except Exception as ex:                         # noqa: BLE001
+                notes.append(f"回归扩样本：{e.code} {e.name} 财报取不到（{ex.__class__.__name__}），跳过")
+        if not cache:
+            return [], notes, ""
+        from ir_agent.operators.ttm import latest_quarter
+        spot = next((f.period for f in (r.quotes.facts if r.quotes else []) if f.key == "market_cap"), None)
+        mc = r.ledger.get("market_cap", spot, as_of=as_of)
+        ctx = dict(quote_day=mc.as_of, fp=fund_period(r.period), as_of=as_of,
+                   ttm_end=latest_quarter(r.ledger, "net_profit_attr_parent", as_of),
+                   tgt_bs=balance_period(r.ledger, as_of), tgt_flow=flow_end(r.ledger, as_of),
+                   snapshot_dir=snapshot_dir)
+        names = {e.code: e.name for e in new}
+        paths = {e.code: tuple(e.levels) for e in new}
+        extra = _build_sample(list(cache), names, paths, cache, ctx, notes)
+    except Exception as ex:                                 # noqa: BLE001
+        return [], notes + [f"回归扩样本未完成（{ex.__class__.__name__}: {str(ex)[:80]}），回归用原样本"], ""
+    notes.append(f"回归扩样本：扩大到申万二级「{used}」，新增 {len(extra)} 家（只用于回归）")
+    return extra, notes, f"申万二级「{used}」"

@@ -95,7 +95,7 @@ def test_足球场含现价与各方法(wb):
     from ir_agent.relval_sheet import write_sheet
     write_sheet(wb, _res(), DCF_OK)
     t = _text(wb)
-    for label in ("DCF 三档", "蒙特卡洛 P5–P95", "可比 PE(TTM)", "回归 PB 对 ROE", "现价"):
+    for label in ("DCF 三档", "蒙特卡洛 P5–P95", "可比 PE(TTM)", "回归 PB 对三年平均 ROE", "现价"):
         assert label in t
 
 

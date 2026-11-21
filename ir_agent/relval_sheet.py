@@ -17,6 +17,7 @@ from openpyxl.chart import BarChart, Reference, ScatterChart, Series
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from ir_agent.market import is_us
+from ir_agent.relval import _X_CN as _XNAME
 from ir_agent.relval import LABEL, REG_SPEC, RelvalResult, multiples
 
 SHEET = "9_相对估值"
@@ -152,7 +153,8 @@ def _comps(res: RelvalResult, w: _W) -> None:
 
 def _regression(res: RelvalResult, w: _W, kind: str) -> tuple | None:
     """一条回归的统计量、本司、样本与剔除。返回散点图要用的单元格区域。"""
-    xf, yk, name = REG_SPEC[kind]
+    xfs, yk, name = REG_SPEC[kind]
+    xf = xfs[0]
     r = res.regs.get(kind)
     w.title(f"二、回归调整：{name}（全行业横截面）")
     if r is None:
@@ -164,7 +166,7 @@ def _regression(res: RelvalResult, w: _W, kind: str) -> tuple | None:
                         ("斜率 t 值", r.t, NUM), ("样本数 n", r.n, "0"),
                         ("残差标准误 s", r.s, NUM)):
         w.row(label, v, fmt=f)
-    w.row(f"本司{'ROE' if xf == 'roe' else '营收增速'}", r.x0, fmt=PCT)
+    w.row(f"本司{_XNAME[xf]}", r.x0, fmt=PCT)
     if r.fit_mult is not None:
         w.row("应得倍数", r.fit_mult, fmt=X2)
         w.row("倍数 P10–P90", r.lo_mult, r.hi_mult, fmt=X2)
@@ -174,7 +176,7 @@ def _regression(res: RelvalResult, w: _W, kind: str) -> tuple | None:
         w.row("外推", "本司落在行业样本主体（P5–P95）之外，预测区间因此变宽")
     w.gap()
 
-    w.row("代码", "公司", "ROE" if xf == "roe" else "营收增速", LABEL[yk], "口径",
+    w.row("代码", "公司", _XNAME[xf], LABEL[yk], "口径",
           bold=True, fill=P_B)
     r0 = w.r
     for code, nm, x, y in r.sample:
@@ -199,7 +201,7 @@ def _scatter(ws, spec, anchor: str) -> None:
     name, xf, yk, (r0, r1), (l0, l1), tr = spec
     ch = ScatterChart()
     ch.title = f"{name}（全行业横截面）"
-    ch.x_axis.title = "ROE" if xf == "roe" else "营收增速"
+    ch.x_axis.title = _XNAME[xf]
     ch.y_axis.title = LABEL[yk]
     ch.style, ch.height, ch.width = 13, 8, 14
     for (a, b), title, marker, line in (((r0, r1), "行业样本", "circle", False),

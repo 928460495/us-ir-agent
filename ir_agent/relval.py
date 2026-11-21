@@ -34,9 +34,12 @@ MIN_REG_N = 15
 MIN_SLOPE_T = 2.0
 PI_QUANTILE = 0.90          # 80% 预测区间的单侧分位 —— P10–P90，与蒙特卡洛龙卷风同口径
 TRIM = (5, 95)              # 因变量两端各剔 5%
-# 回归种类 → (自变量字段, 因变量倍数, 研报里的名字)
-REG_SPEC = {"pb_roe": ("roe", "pb", "PB 对 ROE"),
-            "pe_growth": ("growth", "pe", "PE 对增速")}
+# 回归种类 → (自变量字段（第一个是主驱动，判定看它）, 因变量倍数, 研报里的名字)。
+# 按驱动表配对（spec 2026-11-21 §5）：多元 OLS，逐个系数报 t 值。
+REG_SPEC = {"pb_roe": (("roe3y", "growth"), "pb", "PB 对三年平均 ROE 与增速"),
+            "pe_growth": (("growth", "roe3y"), "pe", "PE 对增速与三年平均 ROE")}
+# 行业样本不足十五家时扩大样本的上限（只用于回归；A 股最多扩到申万二级）
+REG_EXPAND_CAP = 80
 
 # 倍数 → 理论驱动（spec 2026-11-21 §1；Damodaran 的伴随变量）。挑可比、做回归都按这张表，全行业同一规则。
 # ROE 一律用三年平均（跨周期口径，不判定是不是周期股）；EV 类倍数看 EBITDA 利润率（可为负）。
@@ -310,15 +313,25 @@ class Regression:
     excluded: list[tuple[str, str, str]] = field(default_factory=list)
     # 样本里用了退路口径的公司（代码 → 说明），页面逐家标出
     flags: dict[str, str] = field(default_factory=dict)
+    # 多元：各自变量的取值（与 sample 逐行对齐）、各驱动的系数与 t 值、因无差异被剔出的驱动
+    xnames: tuple[str, ...] = ()
+    xsample: list[tuple[float, ...]] = field(default_factory=list)
+    coefs: dict[str, float] = field(default_factory=dict)
+    ts: dict[str, float] = field(default_factory=dict)
+    dropped: list[str] = field(default_factory=list)
+    # 样本扩大到了哪一级（空 = 没扩）
+    expanded: str = ""
 
 
-_X_CN = {"roe": "ROE", "growth": "营收增速"}
+_X_CN = {"roe": "ROE", "growth": "营收增速", "roe3y": "三年平均 ROE", "ebitda_margin": "EBITDA 利润率"}
 
 
 def _screen(kind: str, peers: list[PeerObs], target: PeerObs):
-    """剔除顺序：本司 → 净资产 → 亏损 → 缺数 → 因变量两端各 5%。每家记原因。"""
-    xf, yk, _ = REG_SPEC[kind]
-    rows: list[tuple[str, str, float, float]] = []
+    """剔除顺序：本司 → 净资产 → 亏损 → 缺数 → 因变量两端各 5%。每家记原因。
+
+    返回的行为 (代码, 名称, 主驱动, 因变量, 全部驱动的元组)。"""
+    xs, yk, _ = REG_SPEC[kind]
+    rows: list[tuple] = []
     excluded: list[tuple[str, str, str]] = []
     flags: dict[str, str] = {}
     dated = _dated(target.np_basis)
@@ -329,13 +342,16 @@ def _screen(kind: str, peers: list[PeerObs], target: PeerObs):
             excluded.append((p.code, p.name, "净资产为负或缺失"))
         elif not _pos(p.net_profit):
             excluded.append((p.code, p.name, "亏损（归母净利润为负或缺失）"))
-        elif getattr(p, xf) is None or (y := multiples(p)[yk]) is None:
-            excluded.append((p.code, p.name, f"缺{_X_CN[xf]}或{LABEL[yk]}"))
+        elif any(getattr(p, x) is None for x in xs) or (y := multiples(p)[yk]) is None:
+            excluded.append((p.code, p.name, f"缺{'或'.join(_X_CN[x] for x in xs)}或{LABEL[yk]}"))
         else:
-            rows.append((p.code, p.name, float(getattr(p, xf)), float(y)))
+            vals = tuple(float(getattr(p, x)) for x in xs)
+            rows.append((p.code, p.name, vals[0], float(y), vals))
             marks = []
-            if xf == "growth" and p.growth_basis == "1y":
+            if "growth" in xs and p.growth_basis == "1y":
                 marks.append("一年增速")
+            if "roe3y" in xs and p.roe3y_basis and p.roe3y_basis != "3y":
+                marks.append(f"ROE 均值 {p.roe3y_basis}")
             if dated:
                 # 美股：各家财年不同，期间标签天然不同 —— 按期末日期对齐时已判过是否落后一季，
                 # 只标那几家（gather_us 写进 lags）
@@ -370,54 +386,66 @@ def _dated(basis: str) -> bool:
 
 def regress(kind: str, sample: list[PeerObs], target: PeerObs,
             shares: Decimal) -> Regression:
-    """全行业横截面回归，给出本司的应得倍数、P10–P90 预测区间与对应每股价值。
+    """全行业横截面多元回归：倍数 = a + Σ bⱼ × 驱动ⱼ（驱动按 REG_SPEC 配对），给出本司的应得倍数、
+    P10–P90 预测区间与对应每股价值。
 
-    可比只有 6 家时做回归，系数是噪声 —— 所以用整个行业（Damodaran 的做法）。
-    不可用（样本少、斜率反向、不显著、应得倍数不为正）时只展示、不进区间。
+    可比只有 6 家时做回归，系数是噪声 —— 所以用整个行业（Damodaran 的做法）。判定看主驱动
+    （第一个自变量）：样本少、主斜率反向、不显著、应得倍数不为正时只展示、不进区间。
+    次驱动在样本里没有差异（或与主驱动共线）时剔出、退化为单变量，记在 `dropped`。
     """
     from scipy.stats import t as tdist
 
-    xf, yk, _ = REG_SPEC[kind]
+    xs, yk, _ = REG_SPEC[kind]
     rows, excluded, flags = _screen(kind, sample, target)
-    r = Regression(kind=kind, sample=rows, excluded=excluded, n=len(rows), flags=flags)
+    r = Regression(kind=kind, sample=[row[:4] for row in rows], excluded=excluded, n=len(rows),
+                   flags=flags, xnames=xs, xsample=[row[4] for row in rows])
     if r.n < 3:
         r.why = "样本不足十五家"
         return r
-    x = np.array([v[2] for v in rows])
-    y = np.array([v[3] for v in rows])
-    xm, ym = x.mean(), y.mean()
-    sxx = float(((x - xm) ** 2).sum())
-    if sxx == 0:
-        r.why = f"样本的{_X_CN[xf]}没有差异"
+    X = np.array([row[4] for row in rows], dtype=float)
+    y = np.array([row[3] for row in rows], dtype=float)
+    if np.ptp(X[:, 0]) == 0:
+        r.why = f"样本的{_X_CN[xs[0]]}没有差异"
         return r
-    b = float(((x - xm) * (y - ym)).sum() / sxx)
-    a = float(ym - b * xm)
-    sse = float(((y - (a + b * x)) ** 2).sum())
-    sst = float(((y - ym) ** 2).sum())
-    s = math.sqrt(sse / (r.n - 2))
-    r.a, r.b, r.s = a, b, s
+    used = [0] + [j for j in range(1, len(xs)) if np.ptp(X[:, j]) > 0]
+    A = np.column_stack([np.ones(r.n)] + [X[:, j] for j in used])
+    if r.n - A.shape[1] < 1 or np.linalg.matrix_rank(A) < A.shape[1]:
+        used = [0]
+        A = np.column_stack([np.ones(r.n), X[:, 0]])
+    r.dropped = [xs[j] for j in range(len(xs)) if j not in used]
+    beta, *_ = np.linalg.lstsq(A, y, rcond=None)
+    dof = r.n - A.shape[1]
+    sse = float(((y - A @ beta) ** 2).sum())
+    sst = float(((y - y.mean()) ** 2).sum())
+    s = math.sqrt(sse / dof)
+    xtxi = np.linalg.inv(A.T @ A)
+    se = s * np.sqrt(np.diag(xtxi))
+    tv = [float(beta[i] / se[i]) if se[i] > 0 else math.inf for i in range(len(beta))]
+    r.a, r.b, r.s, r.t = float(beta[0]), float(beta[1]), s, tv[1]
     r.r2 = 1 - sse / sst if sst else 0.0
-    r.t = b / (s / math.sqrt(sxx)) if s > 0 else math.inf
+    r.coefs = {xs[j]: float(beta[i + 1]) for i, j in enumerate(used)}
+    r.ts = {xs[j]: tv[i + 1] for i, j in enumerate(used)}
 
-    x0 = getattr(target, xf)
-    if x0 is not None:
-        r.x0 = float(x0)
-        p5, p95 = np.percentile(x, TRIM)
-        r.extrapolated = not (p5 <= r.x0 <= p95)
-        half = float(tdist.ppf(PI_QUANTILE, r.n - 2)) * s * math.sqrt(
-            1 + 1 / r.n + (r.x0 - xm) ** 2 / sxx)
-        r.fit_mult = a + b * r.x0
+    x0s = [getattr(target, xs[j]) for j in used]
+    if all(v is not None for v in x0s):
+        r.x0 = float(x0s[0])
+        x0 = np.array([1.0] + [float(v) for v in x0s])
+        r.extrapolated = any(not (np.percentile(X[:, j], TRIM[0]) <= float(v)
+                                  <= np.percentile(X[:, j], TRIM[1])) for j, v in zip(used, x0s))
+        half = float(tdist.ppf(PI_QUANTILE, dof)) * s * math.sqrt(1 + float(x0 @ xtxi @ x0))
+        r.fit_mult = float(x0 @ beta)
         r.lo_mult, r.hi_mult = r.fit_mult - half, r.fit_mult + half
 
+    missing = [_X_CN[xs[j]] for j, v in zip(used, x0s) if v is None]
     if r.n < MIN_REG_N:
         r.why = "样本不足十五家"
-    elif b <= 0:
+    elif r.b <= 0:
         r.why = "斜率方向与理论相反"
     elif r.t < MIN_SLOPE_T:
         r.why = "斜率不显著"
-    elif r.x0 is None:
-        r.why = f"本司缺{_X_CN[xf]}，不适用"
-    elif xf == "growth" and target.growth_basis not in ("3y", "TTM 3y"):
+    elif missing:
+        r.why = f"本司缺{'、'.join(missing)}，不适用"
+    elif "growth" in [xs[j] for j in used] and target.growth_basis not in ("3y", "TTM 3y"):
         # 「TTM 3y」也是三年复合（截止期为中报 / 季报时的写法），只有一年数据才停
         # 本司 x₀ 与样本不同口径，算出的应得倍数是错的 —— 停下，不静默算价
         r.why = "本司营收增速只有一年数据，与样本的三年复合增速口径不同"
@@ -489,7 +517,11 @@ class RelvalResult:
         for note in self.comps_notes:
             lines.append(f"    {note}")
         lines.append("  回归调整（全行业横截面，P10–P90 预测区间）：")
-        for kind, (xf, _, name) in REG_SPEC.items():
+        if any(g.expanded for g in self.regs.values()):
+            lab = next(g.expanded for g in self.regs.values() if g.expanded)
+            lines.append(f"    行业样本不足，回归样本扩大到{lab}（只用于回归，不用于可比名单）")
+        for kind, (xfs, _, name) in REG_SPEC.items():
+            xf = xfs[0]
             r = self.regs.get(kind)
             if r is None:
                 continue
