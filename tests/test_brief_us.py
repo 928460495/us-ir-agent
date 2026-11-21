@@ -25,9 +25,12 @@ def test_美股预研提示_营收单位百万美元_不提卖方研报_检索�
 
 
 def test_A股预研提示逐字不变():
+    """2026-11-21（spec staged-collection §5.2）：模板改为按市场填占位符，不再逐字替换 ——
+    守的仍是「A 股提示词不混进美股措辞」。"""
     from ir_agent import methodology
     p = methodology.build_prompt("电子", "600183")
-    assert p == methodology.PROMPT.format(industry="电子", code="600183", market="A 股", context="")
+    assert "卖方研报" in p and "亿元" in p and "年报" in p
+    assert "10-K" not in p and "百万美元" not in p and "{" not in p
 
 
 # ── 2：方法论审核的第 0 年试算按币种换算 ─────────────────────────────
