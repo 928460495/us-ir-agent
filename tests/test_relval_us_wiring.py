@@ -73,9 +73,9 @@ def test_美股走gather_us并按市场选倍数(monkeypatch):
     monkeypatch.setattr(relval_data, "gather", lambda *a, **k: pytest.fail("美股不该走 A 股 gather"))
     real = relval.comps_bands
 
-    def spy(peers, target, shares, kinds=relval.KINDS):
+    def spy(peers, target, shares, kinds=relval.KINDS, **kw):
         seen["kinds"] = kinds
-        return real(peers, target, shares, kinds=kinds)
+        return real(peers, target, shares, kinds=kinds, **kw)
     monkeypatch.setattr(relval, "comps_bands", spy)
     r = SimpleNamespace(code="AAPL", peer_set=SimpleNamespace(classification=SimpleNamespace(used_path="FF49-35")))
     res, _sk = full._relative_valuation("AAPL", r, date(2026, 10, 26), None, None)

@@ -121,7 +121,7 @@ def multiples(o: PeerObs) -> dict[str, Decimal | None]:
 RELVAL_K = 6
 # 业务距离的名字（页面与说明用）
 _BD_LABEL = {"cn": {0: "同申万三级", 1: "同申万二级"},
-             "us": {0: "同四位 SIC", 1: "同三位 SIC", 2: "同 FF49 行业"}}
+             "us": {0: "同四位 SIC", 1: "同三位 SIC", 2: "同一 FF 行业"}}
 
 
 def business_distance(a: tuple[str, ...], b: tuple[str, ...], market: str) -> int | None:
@@ -228,17 +228,31 @@ class Band:
     mult_mid: Decimal
     mult_hi: Decimal
     n: int
+    # 调和平均（只用正倍数；Baker-Ruback、Liu-Nissim-Thomas）—— 与中位数并列作交叉参照
+    mult_hm: Decimal | None = None
+    hm: Decimal | None = None
 
 
 def _target_metric_ok(kind: str, t: PeerObs) -> bool:
     return implied_price(kind, Decimal(1), t, Decimal(1)) is not None
 
 
+HM_GAP_WARN = 0.15
+
+
+def _harmonic(vals: list[Decimal]) -> Decimal | None:
+    pos = [v for v in vals if v > 0]
+    return Decimal(len(pos)) / sum((1 / v for v in pos), Decimal(0)) if pos else None
+
+
 def comps_bands(peers: list[PeerObs], target: PeerObs,
-                shares: Decimal, kinds: tuple[str, ...] = KINDS
+                shares: Decimal, kinds: tuple[str, ...] = KINDS,
+                comps_by_kind: dict[str, list[PeerObs]] | None = None
                 ) -> tuple[dict[str, Band | None], list[str]]:
-    """同业 P25 / 中位数 / P75 × 本司指标。第二项是「不适用」的原因，每条以倍数名开头。"""
-    if not peers:
+    """同业 P25 / 中位数 / P75 × 本司指标，并列调和平均。第二项是「不适用」与提示，每条以倍数名开头。
+
+    `comps_by_kind` 给出时每个倍数用自己的可比名单（按驱动挑出的，或退回的市值名单）。"""
+    if not peers and not comps_by_kind:
         # 可比名单没取到（可比分析未完成）—— 说成「不足四家」会误导
         return ({k: None for k in kinds},
                 [f"{LABEL[k]}：可比名单未取到，不适用" for k in kinds])
@@ -250,7 +264,8 @@ def comps_bands(peers: list[PeerObs], target: PeerObs,
             why.append(f"{LABEL[kind]}：本司无一致预期（或预期为负），只给 TTM" if kind == "pe_ntm"
                        else f"{LABEL[kind]}：本司对应指标为负或缺失，不适用")
             continue
-        vals = [m for p in peers if (m := multiples(p)[kind]) is not None]
+        pool = comps_by_kind.get(kind, peers) if comps_by_kind else peers
+        vals = [m for p in pool if (m := multiples(p)[kind]) is not None]
         q = _quartiles(vals)
         if q is None:
             bands[kind] = None
@@ -259,10 +274,14 @@ def comps_bands(peers: list[PeerObs], target: PeerObs,
             continue
         lo, hi = q
         mid = _median(vals)
+        hm = _harmonic(vals)
         bands[kind] = Band(lo=implied_price(kind, lo, target, shares),
                            mid=implied_price(kind, mid, target, shares),
                            hi=implied_price(kind, hi, target, shares),
-                           mult_lo=lo, mult_mid=mid, mult_hi=hi, n=len(vals))
+                           mult_lo=lo, mult_mid=mid, mult_hi=hi, n=len(vals),
+                           mult_hm=hm, hm=implied_price(kind, hm, target, shares) if hm else None)
+        if hm is not None and mid > 0 and abs(mid - hm) / mid > Decimal(str(HM_GAP_WARN)):
+            why.append(f"{LABEL[kind]}：中位数与调和平均差距超过提示阈值，同业倍数分布偏斜，以中位数为主")
     return bands, why
 
 
@@ -437,13 +456,16 @@ class RelvalResult:
     warnings: list[str] = field(default_factory=list)
     # 样本剔除说明（含代码与期间）。**只上页面、不进摘要** —— 摘要不许有数字。
     sample_notes: list[str] = field(default_factory=list)
-    # 6 家可比的观测（页面逐行列出）。
+    # 市值近邻可比（分析阶段的名单；驱动可比不足时的退路）。
     comps_peers: list[PeerObs] = field(default_factory=list)
+    # 各倍数实际用的可比名单，及按驱动挑选时的 [(代码, 业务距离, 基本面距离)]（退回的倍数没有）
+    comps_by_kind: dict[str, list[PeerObs]] = field(default_factory=dict)
+    selection: dict[str, list[tuple[str, int, float]]] = field(default_factory=dict)
 
     def summary(self) -> str:
         """进撰写提示词。**只用占位符**，原因文字不含数字 —— 与估值摘要同一契约。"""
         at = f"@{self.as_of.isoformat()}"
-        lines = [f"相对估值（可比沿用原名单；回归样本为{self.industry}行业全体）",
+        lines = [f"相对估值（可比按各倍数的理论驱动从行业样本挑选，不足时退回按市值；回归样本为{self.industry}行业全体）",
                  "  本司分母（与同业同一口径，倍数 × 分母 → 每股价值）：归母净利润 "
                  f"[[valuation.rel_target_np{at}]]、EBITDA [[valuation.rel_target_ebitda{at}]]"
                  + ("（滚动十二个月，截至本司最新已披露季度 —— 不是年报利润，截止期见相对估值页"
@@ -453,9 +475,15 @@ class RelvalResult:
             if self.comps.get(kind) is None:
                 continue
             k = f"valuation.rel_{kind}"
+            hm = (f"；调和平均 [[{k}_mult_hm{at}]] → 每股 [[{k}_hm{at}]]"
+                  if self.comps[kind].mult_hm is not None else "")
             lines.append(
                 f"    {LABEL[kind]}：倍数 [[{k}_mult_lo{at}]]／[[{k}_mult_mid{at}]]／"
-                f"[[{k}_mult_hi{at}]] → 每股 [[{k}_lo{at}]]／[[{k}_mid{at}]]／[[{k}_hi{at}]]")
+                f"[[{k}_mult_hi{at}]] → 每股 [[{k}_lo{at}]]／[[{k}_mid{at}]]／[[{k}_hi{at}]]{hm}")
+            names = [p.name for p in self.comps_by_kind.get(kind, [])]
+            if names:
+                how = "按驱动挑选" if self.selection.get(kind) else "市值近邻"
+                lines.append(f"      可比：{'、'.join(names)}（{how}）")
         if self.comps.get("ev_ebitda") is not None:
             # 用户 2026-11-15 选 A：第一阶段可比表的 EV/EBITDA 是年报口径，这里是 TTM
             lines.append("    注：本节 EV/EBITDA 用最新 TTM EBITDA，第一阶段可比表用报告期年报 EBITDA，"
@@ -511,6 +539,8 @@ def to_facts(res: RelvalResult, as_of: date,
         out += [f(f"{k}_lo", b.lo, money), f(f"{k}_mid", b.mid, money), f(f"{k}_hi", b.hi, money),
                 f(f"{k}_mult_lo", b.mult_lo, "x"), f(f"{k}_mult_mid", b.mult_mid, "x"),
                 f(f"{k}_mult_hi", b.mult_hi, "x")]
+        if b.mult_hm is not None and b.hm is not None:
+            out += [f(f"{k}_mult_hm", b.mult_hm, "x"), f(f"{k}_hm", b.hm, money)]
     for kind, r in res.regs.items():
         k = f"valuation.rel_reg_{_REG_KEY[kind]}"
         # 统计量不论可不可用都落账本 —— 「为什么不可用」也要能被核验

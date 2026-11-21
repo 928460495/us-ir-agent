@@ -185,7 +185,7 @@ def test_美股按SIC层级():
          + [_o(f"C{i}", path=("3661",)) for i in range(4)])
     comps, rows, note = select_by_drivers("pb", s, tgt)
     assert [bd for _, bd, _ in rows] == [0, 0, 1, 1, 2, 2]
-    assert "同 FF49 行业" in note
+    assert "同一 FF 行业" in note
 
 
 def test_A股取数把申万路径带进观测(monkeypatch, tmp_path):
@@ -203,3 +203,98 @@ def test_A股取数把申万路径带进观测(monkeypatch, tmp_path):
     assert tgt.path == ("电子", "元件", "印制电路板")
     assert {o.code: o.path for o in sample}["002463"] == ("电子", "元件", "被动元件")
 
+
+
+# ── Task 3：可比区间用驱动可比 + 调和平均 + 退回 ─────────────────
+
+from ir_agent.relval import HM_GAP_WARN, comps_bands   # noqa: E402
+
+
+def _pe_peer(code, pe, **kw):
+    o = _o(code, **kw)
+    o.market_cap = D(str(pe)) * o.net_profit
+    return o
+
+
+def test_各倍数用各自名单():
+    tgt = _o("600519")
+    pe_list = [_pe_peer(f"60000{i}", pe) for i, pe in enumerate((10, 12, 14, 16))]
+    pb_list = [_pe_peer(f"60100{i}", 30) for i in range(5)]
+    bands, _ = comps_bands([], tgt, D(1), kinds=("pe", "pb"),
+                           comps_by_kind={"pe": pe_list, "pb": pb_list})
+    assert bands["pe"].n == 4 and bands["pb"].n == 5
+    assert bands["pe"].mult_mid == D(13)
+
+
+def test_调和平均只用正倍数():
+    tgt = _o("600519")
+    peers = [_pe_peer(f"60000{i}", pe) for i, pe in enumerate((10, 20, 40, 40))]
+    b = comps_bands(peers, tgt, D(1), kinds=("pe",))[0]["pe"]
+    assert b.mult_hm == pytest.approx(D(4) / (D(1) / 10 + D(1) / 20 + D(1) / 40 + D(1) / 40))
+    assert b.hm == pytest.approx(b.mult_hm * tgt.net_profit)
+
+
+def test_EV倍数为负的同业不进调和平均():
+    tgt = _o("600519")
+    peers = [_pe_peer(f"60000{i}", 20) for i in range(4)]
+    for p in peers:
+        p.ebitda = D(100)
+    neg = _pe_peer("600009", 20)
+    neg.cash, neg.ebitda = D(10 ** 6), D(100)           # 净现金远超市值 → EV 为负
+    b = comps_bands(peers + [neg], tgt, D(1), kinds=("ev_ebitda",))[0]["ev_ebitda"]
+    assert b.mult_hm is not None and b.mult_hm > 0
+
+
+def test_中位数与调和平均差距大出提示():
+    tgt = _o("600519")
+    peers = [_pe_peer(f"60000{i}", pe) for i, pe in enumerate((2, 30, 40, 50, 60))]
+    bands, why = comps_bands(peers, tgt, D(1), kinds=("pe",))
+    gap = abs(bands["pe"].mult_mid - bands["pe"].mult_hm) / bands["pe"].mult_mid
+    assert gap > D(str(HM_GAP_WARN))
+    assert any(w.startswith("PE(TTM)") and "调和平均" in w for w in why)
+    assert not any(ch.isdigit() for w in why for ch in w)     # 进摘要的说明不含数字
+
+
+def test_驱动可比不足退回市值名单(monkeypatch, tmp_path):
+    from ir_agent import full, relval_data
+    from tests.test_relval_wiring import _r
+
+    tgt = _o("600183")
+    sample = [_o(f"60000{i}") for i in range(3)]          # 驱动可比不足四家
+    mcap = [_pe_peer(f"60200{i}", 10 + i) for i in range(5)]
+    monkeypatch.setattr(relval_data, "gather", lambda *a, **k: (
+        tgt, sample, mcap, D(1), D(100), []))
+    res, skipped = full._relative_valuation("600183", _r(), AS_OF, None, tmp_path)
+    assert [p.code for p in res.comps_by_kind["pe"]] == [p.code for p in mcap]
+    assert any("退回按市值" in n for n in res.comps_notes)
+
+
+def test_驱动可比够时用驱动名单(monkeypatch, tmp_path):
+    from ir_agent import full, relval_data
+    from tests.test_relval_wiring import _r
+
+    tgt = _o("600183")
+    sample = [_pe_peer(f"60000{i}", 10 + i) for i in range(8)]
+    mcap = [_pe_peer(f"60200{i}", 50) for i in range(5)]
+    monkeypatch.setattr(relval_data, "gather", lambda *a, **k: (
+        tgt, sample, mcap, D(1), D(100), []))
+    res, _ = full._relative_valuation("600183", _r(), AS_OF, None, tmp_path)
+    assert len(res.comps_by_kind["pb"]) == RELVAL_K
+    assert {p.code for p in res.comps_by_kind["pb"]} <= {p.code for p in sample}
+    assert res.selection["pb"] and res.selection["pb"][0][0].startswith("60000")
+
+
+def test_摘要与事实带名单与调和平均(monkeypatch, tmp_path):
+    from ir_agent import full, relval_data
+    from tests.test_relval_wiring import _r
+
+    tgt = _o("600183")
+    sample = [_pe_peer(f"60000{i}", 10 + i) for i in range(8)]
+    for p in sample:
+        p.name = f"同业{chr(0x7532 + int(p.code[-1]))}"
+    monkeypatch.setattr(relval_data, "gather", lambda *a, **k: (tgt, sample, [], D(1), D(100), []))
+    res, _ = full._relative_valuation("600183", _r(), AS_OF, None, tmp_path)
+    s = res.summary()
+    assert "[[valuation.rel_pe_mult_hm@" in s and "可比：" in s
+    keys = {f.key for f in relval.to_facts(res, AS_OF)}
+    assert {"valuation.rel_pe_mult_hm", "valuation.rel_pe_hm"} <= keys

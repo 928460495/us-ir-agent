@@ -3682,18 +3682,32 @@ def _relative_valuation(code, r, as_of: date, dcf_res, snapshot_dir):
     try:
         gather = relval_data_us.gather_us if us else relval_data.gather
         tgt, sample, comps, shares, price, notes = gather(r, as_of, snapshot_dir)
-        bands, cnotes = relval.comps_bands(comps, tgt, shares, kinds=relval.kinds_for(tgt, us))
+        kinds = relval.kinds_for(tgt, us)
+        # 各倍数按自己的理论驱动从行业样本挑可比（spec 2026-11-21 §2）；不足四家退回市值近邻名单并写明
+        by_kind: dict = {}
+        selection: dict = {}
+        sel_notes: list[str] = []
+        for k in kinds:
+            picked, rows, note = relval.select_by_drivers(k, sample, tgt)
+            if picked:
+                by_kind[k], selection[k] = picked, rows
+                sel_notes.append(note)
+            else:
+                by_kind[k] = comps
+                sel_notes.append(f"{note}，退回按市值近邻名单")
+        bands, cnotes = relval.comps_bands(comps, tgt, shares, kinds=kinds, comps_by_kind=by_kind)
         regs = {k: relval.regress(k, sample, tgt, shares) for k in relval.REG_SPEC}
         res = relval.RelvalResult(
             as_of=as_of, price=price, shares=shares, target=tgt, comps=bands,
-            comps_notes=cnotes, regs=regs, sample_size=len(sample),
+            comps_notes=sel_notes + cnotes, regs=regs, sample_size=len(sample),
             industry=r.peer_set.classification.used_path,
-            sample_notes=notes, comps_peers=comps)
+            sample_notes=notes, comps_peers=comps, comps_by_kind=by_kind, selection=selection)
     except relval_data.RelvalUnavailable as e:
         return None, [f"相对估值（{e}）"]
     except Exception as e:                                  # noqa: BLE001
         return None, [f"相对估值（{e.__class__.__name__}: {str(e)[:160]}）"]
-    skipped = [f"相对估值：{n}" for n in cnotes]
+    skipped = [f"相对估值：{n}" for n in sel_notes if "退回" in n]
+    skipped += [f"相对估值：{n}" for n in cnotes]
     skipped += [f"相对估值：回归 {relval.REG_SPEC[k][2]} 不可用 —— {g.why}"
                 for k, g in regs.items() if not g.usable]
     return res, skipped
