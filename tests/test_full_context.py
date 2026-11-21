@@ -2909,7 +2909,10 @@ def test_本分支新增的清单生产者逐个断言渲染标记(monkeypatch, 
                               "test_signed_edits.test_判断项人工改动记录不再说未经审核或原依据未必支撑"),
         "_us_federal_contracts": ("不是独立的清单生产者：说明并进 _load_external_us 的"
                                   "「外部资料（…）」一句；措辞断言在 tests/test_usaspending.py"),
-        "_restore_openweb": "本分支未改动其清单措辞；共用 _openweb_notes",
+        "_restore_openweb": ("按模块读回（spec 2026-11-21-staged-collection）：采到的走 _openweb_notes(label)，"
+                             "前缀「开放网络资料采集（」已登记；缺文件 / 零文档 / 损坏是真缺口，落「未生成」是对的；"
+                             "行为断言在 tests/test_staged_collection_restore.py"),
+        "_restore_openweb_legacy": "原 _restore_openweb 原样改名（读改动前的 openweb.json），措辞未变",
         "_method_review_lines": ("不是终端清单的生产者：返回 review.md 与 "
                                  "assumptions.md 的「方法论审核」行，不进 skipped"),
         "_review_factor_lines": ("不是终端清单的生产者：返回 review.md 的 markdown "

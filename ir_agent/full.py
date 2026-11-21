@@ -575,7 +575,39 @@ def _factor_host_check_note(factor_data: dict) -> list[str]:
 
 
 def _restore_openweb(r, out: Path) -> list[str]:
-    """第二阶段：读回第一阶段落盘的开放网络文档。**不重新采集。**
+    """第二、三次调用：读回第一次调用落盘的开放网络文档。**不重新采集。**
+
+    按模块落盘（spec 2026-11-21-staged-collection §3）：按 宏观 → 战略 → 产业链 的顺序读回
+    `openweb_<模块>.json`；一个模块文件都没有时（改动前的产物）退回读整份 `openweb.json`。"""
+    from ir_agent.sources import openweb
+    from ir_agent.sources.external import Corpus
+
+    files = [(m, out / f"openweb_{m}.json") for m in openweb.MODULES]
+    if not any(f.exists() for _, f in files):
+        return _restore_openweb_legacy(r, out)
+    if r.corpus is None:
+        r.corpus = Corpus(as_of=r.as_of)
+    code = getattr(r, "code", "") or ""
+    notes: list[str] = []
+    for m, f in files:
+        label = _MODULE_SHORT[m]
+        if not f.exists():
+            notes.append(f"开放网络资料（{label}）：{label}：未跨阶段存活（未找到 {f.name}），外部引文可能核验不过")
+            continue
+        res = openweb.load(f, r.corpus)
+        if res.docs:
+            notes += _openweb_notes(res, label)
+        elif set(res.missing_slots) == set(openweb.module_slots(m, code)):
+            # 与旧逻辑同一信号：第一阶段零文档时缺口等于本模块槽位全集；损坏文件读出来缺口为空
+            notes.append(f"开放网络资料（{label}）：{label}：第一阶段确实一篇都没采到（并非本次读取丢失）")
+        else:
+            notes.append(f"开放网络资料（{label}）：{label}：未跨阶段存活（落盘文件读不出文档，可能已损坏或为空），"
+                         "外部引文可能核验不过")
+    return notes
+
+
+def _restore_openweb_legacy(r, out: Path) -> list[str]:
+    """改动前的产物：读回整份 `openweb.json`。**不重新采集。**
 
     落盘文件缺失或损坏时照常继续，只记清单 —— 重跑 discover 会引入第一
     阶段没有的文档，那正是这套落盘机制要防的事。
