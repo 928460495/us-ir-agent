@@ -62,6 +62,8 @@ class Classification:
 class Member:
     code: str
     name: str
+    # 分类路径（A 股申万各级名称）。相对估值按它算业务距离；美股的 SIC 在 `Peers.sic_of`
+    path: tuple[str, ...] = ()
 
 
 @dataclass
@@ -116,7 +118,7 @@ def peer_set(code: str, taxonomy: Taxonomy | None = None,
         if "退市" in e.name:
             out.excluded.append((e.code, e.name, "已退市"))
             continue
-        out.members.append(Member(e.code, e.name))
+        out.members.append(Member(e.code, e.name, tuple(e.levels)))
 
     if not out.members:
         raise IndustryUnavailable(f"{code}: 行业「{used}」下没有可用同业")

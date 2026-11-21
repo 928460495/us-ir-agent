@@ -349,6 +349,7 @@ def gather(r, as_of: date, snapshot_dir):
     fp = fund_period(r.period)
     tcode = peers.target
     names = {m.code: m.name for m in peers.members}
+    paths = {m.code: tuple(getattr(m, "path", ()) or ()) for m in peers.members}
     notes: list[str] = [f"{m.code} {m.name}：财报未取到（行业聚合时取数失败），剔除"
                         for m in peers.members if m.code not in cache]
     codes = [c for c in cache if c != tcode]
@@ -409,9 +410,10 @@ def gather(r, as_of: date, snapshot_dir):
         if not _disclosed(cache[c], fp, as_of):
             notes.append(f"{c} {name}：截至估值时点未披露 {fp} 财报，剔除（不用上期凑）")
             continue
-        sample.append(obs_from_facts(c, name, cache[c], fp, q["market_cap"], as_of,
-                                     ttm_end=ttm_end, bs_period=tgt_bs,
-                                     flow_end=tgt_flow))
+        o = obs_from_facts(c, name, cache[c], fp, q["market_cap"], as_of,
+                           ttm_end=ttm_end, bs_period=tgt_bs, flow_end=tgt_flow)
+        o.path = paths.get(c, ())
+        sample.append(o)
 
     if len(closes) != n_cached:
         import json
@@ -427,6 +429,8 @@ def gather(r, as_of: date, snapshot_dir):
         pass
     target = obs_from_ledger(tcode, peers.target_name, r.ledger, fp, as_of, mc_fact.value,
                              bs_period=tgt_bs, flow_end_q=tgt_flow)
+    tpath = getattr(peers.classification, "path", "") or ""
+    target.path = tuple(x for x in str(tpath).split("-") if x)
 
     by_code = {o.code: o for o in sample}
     comps_codes = getattr(r, "comps_codes", None) or []

@@ -104,6 +104,8 @@ def gather_us(r, as_of: date, snapshot_dir) -> tuple[PeerObs, list[PeerObs], lis
     if np_end is not None:
         target.np_basis = f"TTM 截至 {np_end.isoformat()}"
     target.price = price
+    target.path = (str(peers.classification.path),) if peers.classification.path else ()
+    sic_of = getattr(peers, "sic_of", None) or {}
     target.eps_ntm, target.ntm_basis = _ntm_for(tcode, fye, as_of, store)
 
     comps_codes = list(getattr(r, "comps_codes", None) or [])
@@ -164,6 +166,7 @@ def gather_us(r, as_of: date, snapshot_dir) -> tuple[PeerObs, list[PeerObs], lis
         o = obs_from_ledger(t, b.name, led, peer_fp, as_of, cap, np_ttm=np_ttm,
                             bs_period=bs_p, flow_end_q=fl_q)
         o.lags = lags
+        o.path = (sic_of[t],) if sic_of.get(t) else ()
         if t in comps_codes:
             o.price = q.price
             o.eps_ntm, o.ntm_basis = _ntm_for(t, b.fye, as_of, store)

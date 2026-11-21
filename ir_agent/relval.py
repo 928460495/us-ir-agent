@@ -81,6 +81,8 @@ class PeerObs:
     roe3y: Decimal | None = None
     roe3y_basis: str = ""
     ebitda_margin: Decimal | None = None
+    # 业务分类路径：A 股申万（一级, 二级, 三级），美股（四位 SIC,）—— 业务距离用
+    path: tuple[str, ...] = ()
 
     @property
     def minority(self) -> Decimal | None:
@@ -112,6 +114,79 @@ def multiples(o: PeerObs) -> dict[str, Decimal | None]:
         "pe_ntm": o.price / o.eps_ntm if _pos(o.price) and _pos(o.eps_ntm) else None,
         "ev_sales": ev / o.revenue if ev is not None and _pos(o.revenue) else None,
     }
+
+
+# ── 按业务与基本面挑可比（spec 2026-11-21 §2） ────────────────────────
+
+RELVAL_K = 6
+# 业务距离的名字（页面与说明用）
+_BD_LABEL = {"cn": {0: "同申万三级", 1: "同申万二级"},
+             "us": {0: "同四位 SIC", 1: "同三位 SIC", 2: "同 FF49 行业"}}
+
+
+def business_distance(a: tuple[str, ...], b: tuple[str, ...], market: str) -> int | None:
+    """只看分类层级，全行业同一规则。A 股：0 = 同三级、1 = 同二级，再远不算（底线二级，
+    `taxonomy.widen` 同一条线）；美股：0 = 同四位 SIC、1 = 同三位、2 = 同 FF49（样本本就是同一 FF49）。
+    路径缺失给 None —— 不参与挑选。"""
+    if not a or not b:
+        return None
+    if market == "us":
+        x, y = a[0], b[0]
+        if x == y:
+            return 0
+        return 1 if x[:3] == y[:3] else 2
+    if a == b:
+        return 0
+    return 1 if len(a) >= 2 and len(b) >= 2 and a[:2] == b[:2] else None
+
+
+def _market(code: str) -> str:
+    from ir_agent.market import is_us
+
+    return "us" if is_us(code) else "cn"
+
+
+def select_by_drivers(kind: str, sample: list[PeerObs], target: PeerObs, k: int = RELVAL_K
+                      ) -> tuple[list[PeerObs], list[tuple[str, int, float]], str]:
+    """在「该倍数适用且驱动齐全」的行业样本里，按（业务距离，基本面距离）排序取前 k 家。
+
+    基本面距离：各驱动按候选的四分位距标准化后的欧氏距离（稳健：一两家极端值不主导；
+    四分位距为 0 的维度不参与）。先用尽业务距离 0 的公司，不够才用 1、2 补。
+    返回（可比，[(代码, 业务距离, 基本面距离)]，说明）；不足 `MIN_BAND` 家返回空列表与原因。
+    """
+    mk = _market(target.code)
+    drv = DRIVERS[kind]
+    if any(getattr(target, d) is None for d in drv) or not target.path:
+        return [], [], f"{LABEL[kind]}：本司缺驱动数据或行业路径，无从按基本面挑可比"
+    cands: list[tuple[PeerObs, int]] = []
+    for p in sample:
+        if p.code == target.code or multiples(p)[kind] is None:
+            continue
+        if any(getattr(p, d) is None for d in drv):
+            continue
+        bd = business_distance(target.path, p.path, mk)
+        if bd is not None:
+            cands.append((p, bd))
+    if len(cands) < MIN_BAND:
+        return [], [], f"{LABEL[kind]}：业务与基本面可比不足四家"
+    scales: dict[str, float] = {}
+    for d in drv:
+        q1, q3 = np.percentile([float(getattr(p, d)) for p, _ in cands], [25, 75])
+        if q3 - q1 > 0:
+            scales[d] = float(q3 - q1)
+
+    def dist(p: PeerObs) -> float:
+        return math.sqrt(sum(((float(getattr(p, d)) - float(getattr(target, d))) / sc) ** 2
+                             for d, sc in scales.items()))
+
+    ranked = sorted(((p, bd, dist(p)) for p, bd in cands), key=lambda x: (x[1], x[2], x[0].code))[:k]
+    far = max(bd for _, bd, _ in ranked)
+    note = (f"{LABEL[kind]}：按业务距离与{'、'.join(_DRV_CN[d] for d in drv)}挑可比，"
+            f"最远用到{_BD_LABEL[mk][far]}")
+    return [p for p, _, _ in ranked], [(p.code, bd, ds) for p, bd, ds in ranked], note
+
+
+_DRV_CN = {"growth": "营收增速", "roe3y": "三年平均 ROE", "ebitda_margin": "EBITDA 利润率"}
 
 
 def kinds_for(target: PeerObs, us: bool) -> tuple[str, ...]:

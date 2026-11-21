@@ -161,3 +161,12 @@ def test_没有同业数据时明确不可用(r, cons):
     r.peer_books = {}
     with pytest.raises(RelvalUnavailable):
         gather_us(r, AS_OF, None)
+
+
+def test_美股取数SIC带进观测作业务路径(r, cons):
+    from ir_agent.relval_data_us import gather_us
+
+    r.peer_set.sic_of = {t: ("3572" if t == "DELL" else "3571") for t in r.peer_books}
+    tgt, sample, *_ = gather_us(r, AS_OF, None)
+    assert tgt.path == ("3571",)
+    assert {o.code: o.path for o in sample}["DELL"] == ("3572",)
