@@ -76,19 +76,19 @@ def _gather_count(monkeypatch, raw):
     return res
 
 
-def test_美股数量上限二十篇_每主题三篇(monkeypatch):
-    res = _gather_count(monkeypatch, _lines(US_SLOTS, 5))
+def test_美股数量上限二十篇(monkeypatch):
+    res = _gather_count(monkeypatch, _lines(US_SLOTS, 3))
     assert len(res.docs) == 18 and res.missing_slots == []
     extra = [f"追加{i}" for i in range(7)]
-    res = _gather_count(monkeypatch, _lines(US_SLOTS, 5) + "\n" + _lines(extra, 2))
+    res = _gather_count(monkeypatch, _lines(US_SLOTS, 3) + "\n" + _lines(extra, 2))
     assert len(res.docs) == 20
 
 
 def test_A股提示与数量逐字不变():
     assert _prompt("600183") == openweb.PROMPT.format(company="X", code="600183", industry="Y",
                                                        per_slot=openweb.PER_SLOT, as_of=AS_OF.isoformat())
-    assert openweb.slots_for("600183") == openweb.SLOTS and openweb.PER_SLOT == 2 and openweb.MAX_DOCS == 10
-    assert openweb.slots_for("PLTR") == US_SLOTS and openweb.PER_SLOT_US == 3 and openweb.MAX_DOCS_US == 20
+    assert openweb.slots_for("600183") == openweb.SLOTS and openweb.PER_SLOT == 4 and openweb.MAX_DOCS == 10
+    assert openweb.slots_for("PLTR") == US_SLOTS and openweb.PER_SLOT_US == 4 and openweb.MAX_DOCS_US == 20
 
 
 def test_美股缺口按美股槽位判定(monkeypatch):

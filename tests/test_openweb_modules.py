@@ -125,3 +125,20 @@ def test_legacy_prompts_neutral():
     """旧的整池采集提示词（改动前产物的路径与测试仍在用）同样不得只举单一行业。"""
     for t in (openweb.PROMPT, openweb.PROMPT_US, openweb._US_EXTRA_TASK):
         assert not any(b in t for b in ("白酒", "封测", "覆铜板", "批价"))
+
+
+# ── 每主题入库上限：A 股、美股统一 4 篇（用户 2026-11-22 决定）──────────────
+def test_per_slot_cap_is_four_both_markets():
+    assert openweb.PER_SLOT == 4 and openweb.PER_SLOT_US == 4
+
+
+@pytest.mark.parametrize("code,module,slot", [("600519", "strategy", "竞争格局与份额"),
+                                              ("PLTR", "strategy", "竞争格局")])
+def test_gather_module_keeps_four_per_slot(monkeypatch, code, module, slot):
+    _fake_fetch(monkeypatch)
+    raw = "\n".join(_line(slot, i) for i in range(1, 7))     # 6 篇候选，只留 4 篇
+    res = openweb.gather_module(lambda p: raw, module, code=code, company="X", industry="Y",
+                                as_of=AS_OF, corpus=Corpus(as_of=AS_OF))
+    assert len(res.docs) == 4
+    assert "最多 4 个" in openweb.module_prompt(module, company="X", code=code, industry="Y", as_of=AS_OF,
+                                              context={}, slots=openweb.module_slots(module, code))
