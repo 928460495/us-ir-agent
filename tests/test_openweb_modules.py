@@ -112,3 +112,16 @@ def test_prompts_neutral():
     texts += list(openweb.THEME_GUIDE_CN.values()) + list(openweb.THEME_GUIDE_US.values())
     for t in texts:
         assert not any(b in t for b in banned)
+
+
+def test_cn_rules_professional():
+    p = openweb.module_prompt("macro", context={}, slots=openweb.module_slots("macro", "600519"),
+                              company="X", code="600519", industry="Y", as_of=AS_OF)
+    for k in ("国家统计局", "行业协会", "只作线索", "两套都给", "最近一期", "非数据"):
+        assert k in p
+
+
+def test_legacy_prompts_neutral():
+    """旧的整池采集提示词（改动前产物的路径与测试仍在用）同样不得只举单一行业。"""
+    for t in (openweb.PROMPT, openweb.PROMPT_US, openweb._US_EXTRA_TASK):
+        assert not any(b in t for b in ("白酒", "封测", "覆铜板", "批价"))
