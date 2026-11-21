@@ -150,8 +150,8 @@ def gather_us(r, as_of: date, snapshot_dir) -> tuple[PeerObs, list[PeerObs], lis
                             bs_period=bs_p, flow_end_q=fl_q)
         o.lags = lags
         o.path = (sic_of[t],) if sic_of.get(t) else ()
+        o.price = q.price                   # 每家都带：预期 PE 的可比按驱动挑，未必在市值可比里（终审 1）
         if t in comps_codes:
-            o.price = q.price
             o.eps_ntm, o.ntm_basis = _ntm_for(t, b.fye, as_of, store)
         sample.append(o)
 

@@ -177,3 +177,11 @@ def test_美股预期PE可比只请求给定几家(r, cons):
 
     got = peer_ntm_us(["P3", "P4"], r, AS_OF)
     assert set(got) == {"P3", "P4"} and cons == ["P3", "P4"]
+
+
+def test_美股样本每家都带现价供预期PE用(r, cons):
+    """终审 1：PE 按驱动挑出的同业多半不在市值可比里，没有现价就会被预期 PE 全部剔掉。"""
+    from ir_agent.relval_data_us import gather_us
+
+    _tgt, sample, *_ = gather_us(r, AS_OF, None)
+    assert sample and all(o.price is not None for o in sample)
