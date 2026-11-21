@@ -297,6 +297,76 @@ def _openweb_us_context(code: str, r) -> dict:
             "company_hosts": (domain,) if domain else ()}
 
 
+# ── 按模块采集（spec 2026-11-21-staged-collection）────────────────────
+
+_MODULE_SHORT = {"macro": "宏观", "strategy": "战略", "value_chain": "产业链"}
+RIVALS_MAX = 6
+_CHANNELS_HINT = ("利率、信贷、资产价格与财富、汇率、预期与信心、财政、监管与产业政策、大宗商品与成本、外需与贸易"
+                  " —— 找能说明这些渠道如何作用于本行业的政策原文与数据")
+
+
+def _business_brief(code: str, r) -> str:
+    """公司业务摘要（检索方向用）：美股取 10-K Item 1 开头；A 股取年报「业务情况」一节开头。取不到给空串。"""
+    from ir_agent.market import is_us
+
+    try:
+        if code and is_us(code):
+            return _openweb_us_context(code, r).get("business", "") or ""
+        secs, _ = _load_sections(r)
+        s = secs.sections.get("business") if secs is not None else None
+        return (s.text[:400] if s is not None else "")
+    except Exception:                                       # noqa: BLE001
+        return ""
+
+
+def _rivals(r) -> str:
+    """战略检索点名的对手：可比公司的名称（最多 `RIVALS_MAX` 家）。"""
+    try:
+        names = {m.code: m.name for m in r.peer_set.members}
+    except AttributeError:
+        return ""
+    codes = list(getattr(r, "comps_codes", None) or [])
+    return "、".join(names.get(c, c) for c in codes[:RIVALS_MAX])
+
+
+def _chain_context(strategy_md: str) -> str:
+    """产业链检索带上战略对供应商、买方两力的结论（战略没通过时为空）。"""
+    return "\n".join(x.strip(" ·") for x in (strategy_md or "").splitlines()
+                     if "供应商议价能力" in x or "买方议价能力" in x)
+
+
+def _collect_module(module: str, code: str, r, as_of: date, out: Path | None, client,
+                    context: dict[str, str]) -> list[str]:
+    """一个定性模块开工前的开放网络采集。`openweb_<模块>.json` 已在 → 读回、不重采（第一次调用重跑时，
+    模块看到的资料与首跑相同）；否则检索、入库、落盘。失败只记清单，不阻断模块。返回清单条目。"""
+    from ir_agent.sources import openweb
+    from ir_agent.sources.external import Corpus
+
+    name, label = openweb.MODULE_NAME[module], _MODULE_SHORT[module]
+    path = out / f"openweb_{module}.json" if out is not None else None
+    if client is None and (path is None or not path.exists()):
+        return []                       # 没有联网客户端（离线调用）也没有落盘结果：不采集
+    if getattr(r, "corpus", None) is None:
+        r.corpus = Corpus(as_of=as_of)
+    if path is not None and path.exists():
+        return _openweb_notes(openweb.load(path, r.corpus), label)
+    extra = _openweb_us_context(code, r)
+    try:
+        res = openweb.gather_module(client, module, code=code, company=_company_name(code),
+                                    industry=_industry_path(code), as_of=as_of, corpus=r.corpus,
+                                    context=context, company_hosts=extra.get("company_hosts", ()))
+    except Exception as e:                                  # noqa: BLE001
+        return [f"{name}：开放网络采集未执行（{e.__class__.__name__}: {str(e)[:120]}）"]
+    notes: list[str] = []
+    if path is not None:
+        try:
+            openweb.save(res, path)
+        except Exception as e:                              # noqa: BLE001
+            notes.append(f"{name}：开放网络资料未能落盘（{e.__class__.__name__}: {str(e)[:120]}）"
+                         "——本阶段可用，但第二阶段读不到，相关外部引文到时可能核验不过")
+    return notes + _openweb_notes(res, label)
+
+
 def _load_openweb(code: str, r, as_of: date, out: Path, client,
                   industry: str) -> list[str]:
     """开放网络文档入语料库。返回要记进产物清单的条目。
@@ -364,7 +434,7 @@ def _load_openweb(code: str, r, as_of: date, out: Path, client,
     return skipped + _openweb_notes(res)
 
 
-def _openweb_notes(res) -> list[str]:
+def _openweb_notes(res, label: str = "") -> list[str]:
     """采集结果里要记进产物清单的条目。**两个阶段共用同一份措辞。**
 
     两处各写一遍同一组说明，早晚会分叉——而且已经分叉过：
@@ -395,7 +465,7 @@ def _openweb_notes(res) -> list[str]:
     # （抓取失败几篇、哪个槽位没取到、主机校验是否降级），把它也
     # 标成「未生成」就是在说没采到——而 docs 里明明有东西。
     # 见 `research._PREFIX` 的注释：这是同一个失败的第四次。
-    lines: list[str] = ["开放网络资料采集："]
+    lines: list[str] = [f"开放网络资料采集（{label}）：" if label else "开放网络资料采集："]
     for note in getattr(res, "search_failed", []):
         lines.append(f"  · {note}")
     if res.fetch_failed:
@@ -420,7 +490,8 @@ def _openweb_notes(res) -> list[str]:
                      "降级（本机 DNS 被代理劫持，IP 层校验无从进行）"
                      "——内网地址拦截本轮依赖代理侧")
     for slot in res.missing_slots:
-        lines.append(f"  · {slot}：未取到")
+        # 按模块采集时缺口带模块名（spec 2026-11-21-staged-collection §3）：「战略：替代品与新进入者 未取到」
+        lines.append(f"  · {label}：{slot} 未取到" if label else f"  · {slot}：未取到")
     if len(lines) == 1:
         return []
     return ["\n".join(lines)]
@@ -1814,7 +1885,7 @@ def _analyse_facts(code: str, r, as_of: date, snapshot_dir):
 def _analyse_qualitative(code: str, r, as_of: date, model,
                          md: dict, pr: dict, skipped: list[str], *,
                          out: Path | None = None, stops: list | None = None,
-                         statuses: list | None = None):
+                         statuses: list | None = None, research_client=None):
     """需要模型的定性层（宏观定性 / 战略 / 产业链）。**就地**写入调用方的
     md/pr/skipped，只返回本层用的 client —— 开销要累计到总开销里。
 
@@ -1849,8 +1920,21 @@ def _analyse_qualitative(code: str, r, as_of: date, model,
                  if f.key == "market_cap"), None)
     catalog = _qual_catalog(r, as_of)
     kw = dict(out=out, sink=statuses, catalog=catalog)
+    # 各模块开工前按自己的框架采集（spec 2026-11-21-staged-collection §2）；采集失败只记清单
+    online = research_client is not None
+    brief = _business_brief(code, r) if online else ""
+    us_ctx = _openweb_us_context(code, r) if online else {}
+
+    def collect(module: str, ctx: dict) -> None:
+        skipped.extend(_collect_module(module, code, r, as_of, out, research_client,
+                                       {"公司业务": brief, **ctx}))
+        _refresh_external_md(r, md)
+
+    collect("macro", {"关注的传导渠道": _CHANNELS_HINT, "本行业监管机构": us_ctx.get("regulators", "")})
     take("宏观定性", lambda: _load_macro_view(r, as_of, qual_client, pr["宏观"], **kw))
+    collect("strategy", {"主要对手": _rivals(r)})
     take("战略", lambda: _load_strategy(r, as_of, qual_client, spot, **kw))
+    collect("value_chain", {"战略结论（供应商与买方议价）": _chain_context(md.get("战略", ""))})
     take("产业链", lambda: _load_value_chain(r, as_of, qual_client, **kw))
     return qual_client
 
@@ -2776,12 +2860,8 @@ def run_analyse(code: str, r, as_of: date, out_dir: str | Path, *,
     # 开放网络要联网工具 —— 不开的话不会报错，只会安静地什么都搜不到，比
     # 直接失败更容易被忽略。`industry` 走确定性查表（`_industry_path`）：
     # 预研已挪到辩论① 之后，旧写法 `meth.industry` 在这里会恒为空。
+    # 开放网络采集挪到各定性模块开工前（spec 2026-11-21-staged-collection）：这里只建联网客户端
     research_client = make_client(model=model, tools=["WebSearch", "WebFetch"])
-    skipped += _load_openweb(code, r, as_of, out, research_client,
-                             industry=_industry_path(code))
-    # **清单要按语料库的实际内容重渲染。** 不重渲染，md（进看板、进
-    # state.json、后两次调用读回）说的就是加文档之前的篇数与分级构成。
-    _refresh_external_md(r, md)
     # 公告入库**不需要 client**：挑选是确定性的标题分类（`announce.
     # is_substantive`），因子定向挪到消费端由 `gaps._match_announce` 做。
     skipped += _load_announce(code, r, as_of, out, md)
@@ -2790,7 +2870,8 @@ def run_analyse(code: str, r, as_of: date, out_dir: str | Path, *,
     stops: list[str] = []
     statuses: list[dict] = []
     qual_client = _analyse_qualitative(code, r, as_of, model, md, pr, skipped,
-                                       out=out, stops=stops, statuses=statuses)
+                                       out=out, stops=stops, statuses=statuses,
+                                       research_client=research_client)
     cost = Decimal(str(research_client.total_cost_usd + qual_client.total_cost_usd))
     for st in statuses:
         if st["state"] == HUMAN_SIGNED:
