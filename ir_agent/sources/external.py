@@ -192,6 +192,11 @@ class Document:
     # 电话会纪要（二手转存）/ "peer_filing"=竞争对手的法定披露。分级管可信度，渠道管来源方 ——
     # 门① 清单按它分节，因子采集据此标「公告 / 纪要 / 同业披露」，不把对手的话说成本司公告。
     channel: str = ""
+    # 开放网络资料由哪个模块采集（spec 2026-11-21-staged-collection §6）："" = 共用（研报、公告、申报、
+    # 旧产物）/ "macro" / "strategy" / "value_chain" / "macro_track"。定性模块只看共用与本模块的
+    module: str = ""
+    # 采集时模型自述的统计口径与频率（未核验），如「规模以上，月度」
+    scope: str = ""
 
     def cite(self) -> str:
         return (f"{self.publisher}《{self.title}》"

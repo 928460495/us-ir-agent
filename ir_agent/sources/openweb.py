@@ -213,6 +213,7 @@ class Candidate:
     publisher: str
     published: date
     extra: bool          # 槽位不在 SLOTS 里 → 额外发现，不参与缺口判定
+    scope: str = ""      # 可选第六段：统计口径与频率（模型自述，未核验）
 
 
 def parse_candidates(text: str, slots: tuple[str, ...] = SLOTS) -> list[Candidate]:
@@ -239,7 +240,8 @@ def parse_candidates(text: str, slots: tuple[str, ...] = SLOTS) -> list[Candidat
         slot = parts[0]
         out.append(Candidate(slot=slot, title=parts[1], url=url_m.group(0),
                              publisher=parts[3], published=when,
-                             extra=slot not in slots))
+                             extra=slot not in slots,
+                             scope=parts[5] if len(parts) > 5 else ""))
     return out
 
 
@@ -334,6 +336,164 @@ _US_THEME_TASK = """上网搜索，为主题「{theme}」找**最多 {per_slot} 
 _US_EXTRA_TASK = """下面六个通用主题已另行检索，这里**不要再给**：{done}。
 这个行业若还有别的关键外部资料（例如药品审批、利率与存贷利差、油价与产量、政府预算、
 订阅续费率），另起主题名，最多 {n_themes} 个主题、每个主题最多 {per_slot} 个网页。没有就不输出。"""
+
+
+# ── 按模块采集（spec 2026-11-21-staged-collection）────────────────────
+#
+# 三个定性模块开工前各采各的：槽位由模块的分析框架决定，沿用两个市场原有的主题名（用户决定不改名），
+# 宏观与战略各新增一个槽位。缺口按模块报。一次检索调用 + 空槽位补搜一次。
+
+MODULES: tuple[str, ...] = ("macro", "strategy", "value_chain")
+MODULE_NAME = {"macro": "宏观定性", "strategy": "战略分析", "value_chain": "产业链"}
+MODULE_RETRY = 1
+EXTRA_THEMES = 2
+_MODULE_SLOTS = {
+    "cn": {"macro": ("政策与监管", "需求领先指标"),
+           "strategy": ("竞争格局与份额", "替代品与新进入者", "公司重大动态"),
+           "value_chain": ("行业规模与增速", "上下游价格与供需")},
+    "us": {"macro": ("政策监管与诉讼", "需求领先指标"),
+           "strategy": ("竞争格局", "替代品与新进入者", "公司重大动态"),
+           "value_chain": ("需求与规模", "价格与成本", "客户与合同")},
+}
+_POLICY = ("影响准入、定价、补贴、税负、环保、数据与反垄断的政策原文或监管公告；货币与财政政策中与本行业相关的"
+           "表态；重大诉讼与处罚")
+_LEADING = ("能提前反映本行业需求的指标的最新发布：新订单、开工、审批、预售、招标、库存、信贷投放；"
+            "给数据发布页，不要解读文章")
+_COMPETITION = "集中度与份额变化；上面列出的主要对手的扩产、降价、退出或并购"
+_SUBSTITUTE = "满足同一需求的其他产品或技术的进展与价格；跨界进入者、新产能、准入门槛的变化"
+_EVENTS = "产能投放、并购、重大合同、管理层变动；公司公告已直接入库，这里找公告之外的报道与第三方信息"
+_SIZE = "行业整体规模与增速（含非上市企业的全口径）；量的指标（产量、销量、用户数、业务量）"
+_PRICE = ("本行业产品或服务的价格走势；主要投入品（原材料、能源、人工、带宽、资金）的价格与供需；"
+          "涨跌能否沿产业链传导、滞后多久")
+_CUSTOMER = "下游客户的结构与景气；渠道库存；大客户订单与合同；定价机制（长协、成本加成、按季调价、集中采购）"
+THEME_GUIDE_CN: dict[str, str] = {
+    "政策与监管": _POLICY, "需求领先指标": _LEADING, "竞争格局与份额": _COMPETITION,
+    "替代品与新进入者": _SUBSTITUTE, "公司重大动态": _EVENTS, "行业规模与增速": _SIZE,
+    # A 股没有「客户与合同」槽位 —— 下游客户与定价机制并进这一条（spec §5.3）
+    "上下游价格与供需": _PRICE + "；下游客户的景气与渠道库存；定价机制（长协、成本加成、按季调价、集中采购）",
+}
+THEME_GUIDE_US: dict[str, str] = {
+    "政策监管与诉讼": _POLICY, "需求领先指标": _LEADING, "竞争格局": _COMPETITION,
+    "替代品与新进入者": _SUBSTITUTE, "公司重大动态": _EVENTS, "需求与规模": _SIZE,
+    "价格与成本": _PRICE, "客户与合同": _CUSTOMER,
+}
+
+
+def _mk(code: str) -> str:
+    from ir_agent.market import is_us
+
+    return "us" if code and is_us(code) else "cn"
+
+
+def module_slots(module: str, code: str) -> tuple[str, ...]:
+    return _MODULE_SLOTS[_mk(code)][module]
+
+
+_MODULE_PROMPT = """为一份{market}研究报告的「{name}」一节采集外部资料。
+
+公司：{company}（{code}）
+行业：{industry}
+{context_block}
+上网搜索，为下面每个主题各找**最多 {per_slot} 个**具体网页（多给几个备选，我们逐个抓取，抓不到的跳过）。
+只给网址，不要摘抄正文——正文由我们自己抓取。主题名照抄，冒号后是这个主题要回答的问题：
+{theme_guide}
+{extra_block}
+每条一行：
+
+`候选: <主题> | <网页标题> | <网址> | <发布机构> | <发布日期 YYYY-MM-DD> | <统计口径与频率>`
+
+最后一段写这份资料里关键数据的口径与频率，例如「规模以上工业企业，月度」「全口径，季度，不含税」
+「公司自报，年度」；网页不是数据（政策原文、新闻报道）就写「非数据」。
+
+**硬性要求**
+- **必须给出网址**。没有网址的条目会被直接丢弃 —— 无从复核的转述与凭空捏造无异。
+- **必须给出发布日期（YYYY-MM-DD）**。没写日期、或只写到「2026年7月」这种月份粒度以致解析不出来的
+  条目，同样会被直接丢弃。晚于 {as_of} 的会被剔除：拿未来的资料分析过去，与账本的时点守卫是同一件事。
+{market_rules}
+- **同一个指标有官方与协会两套数时，两套都给**，口径分别写清：全口径还是规模以上、产量还是销量、
+  名义还是实际、含税还是不含税、口径是否调整过 —— 下游会核对它们是否可比。
+- **定期发布的数据给最近一期**：月度、季度数据给 {as_of} 之前最近一次发布的页面，不要给更早的解读文章；
+  年度数据注明是哪一年的。
+- 找不到的主题就不要输出该主题的行，**不要用推测或不相关的网页填充**。
+
+只输出上述格式的行。
+"""
+
+_CN_RULES = """- **来源优先级**由高到低：
+  1. 政府统计与监管部门的原始发布页（国家统计局、海关总署、中国人民银行、国家发展改革委、工业和信息化部、
+     商务部、证监会、交易所等）—— 数据发布页优于对它的解读文章
+  2. 行业协会、一手市场研究机构的原始发布
+  3. 公司与同业的公开信息（官网新闻、投资者关系活动记录）
+  4. 财经媒体（只作线索，不能单独作为依据）"""
+
+_US_RULES = """- **来源优先级**由高到低：
+  1. 美国政府统计与监管部门的原始页面（Census、BEA、BLS、EIA、FDA、FAA、FCC、FTC、DOJ、
+     联邦公报 Federal Register 等）—— 数据发布页优于对它的解读文章{regulators}
+  2. 行业协会、一手研究机构与公司的公开新闻稿；原站拒绝访问时，给同一份新闻稿在
+     PR Newswire、GlobeNewswire 或该机构 / 公司新闻室的转载页，发布机构仍写原机构
+  3. 通讯社（Reuters、AP、AFP、Bloomberg、WSJ、FT、CNBC）对已发生事实的报道
+  4. 其他媒体
+- 下列站点实测拒绝程序访问，不要给（含 Business Wire）：{unfetchable}。
+- 每个网址先用 WebFetch 打开，确认能读到正文再给出；打不开、要登录或付费才能看的不要给。
+  Gartner、Forrester、IDC 等的报告给其新闻稿的正规转载页。
+- 不要给 sec.gov 上的申报文件（10-K、10-Q、8-K 已由 EDGAR 直接入库）。
+- 只给 HTML 网页，不要 PDF（抓不了）；联邦公报等有网页版的给网页版。"""
+
+_EXTRA_BLOCK = """**另外追加最多 {n} 个本行业专属主题。** 先想这个行业公认的经营指标：量、价、成本、客户四类里，
+哪一两个最能决定这家公司的收入和毛利，却不在上面的主题里 —— 例如零售的同店销售、订阅业务的续费率、
+航运的运价指数、发电的利用小时、医药的集采中标价、银行的净息差 —— 据此另起主题名，每个主题最多 {per_slot} 个网页。
+"""
+
+
+def module_prompt(module: str, *, company: str, code: str, industry: str, as_of: date,
+                  context: dict[str, str], slots: tuple[str, ...]) -> str:
+    """某个模块的检索提示词。`context` 是模块的定向上下文（{标题: 内容}，空值省略）；`slots` 可以是补搜时的空槽位子集。"""
+    mk = _mk(code)
+    guide = THEME_GUIDE_US if mk == "us" else THEME_GUIDE_CN
+    per_slot = PER_SLOT_US if mk == "us" else PER_SLOT
+    ctx = {k: v.strip() for k, v in (context or {}).items() if v and v.strip()}
+    regulators = ctx.pop("本行业监管机构", "") if mk == "us" else ""
+    context_block = "".join(f"\n{k}：\n{v}\n" for k, v in ctx.items())
+    rules = (_US_RULES.format(unfetchable="、".join(UNFETCHABLE_US),
+                              regulators=f"\n     本行业监管机构官网：{regulators}" if regulators else "")
+             if mk == "us" else _CN_RULES)
+    extra = (_EXTRA_BLOCK.format(n=EXTRA_THEMES, per_slot=per_slot)
+             if module == "value_chain" and tuple(slots) == module_slots(module, code) else "")
+    return _MODULE_PROMPT.format(
+        market="美股" if mk == "us" else " A 股", name=MODULE_NAME[module], company=company or code,
+        code=code, industry=industry or "未知", context_block=context_block, per_slot=per_slot,
+        theme_guide="\n".join(f"- {s}：{guide[s]}" for s in slots), extra_block=extra,
+        as_of=as_of.isoformat(), market_rules=rules)
+
+
+def gather_module(client, module: str, *, code: str, company: str, industry: str, as_of: date,
+                  corpus, context: dict[str, str] | None = None,
+                  company_hosts: tuple[str, ...] = ()) -> OpenWebResult:
+    """一个模块的采集：一次检索调用；调用后仍为空的槽位补搜一次（`MODULE_RETRY`）。入库文档带 `module`。
+
+    **调用方必须传入已显式开启 WebSearch/WebFetch 工具的 client**（同 `gather`）。首次调用失败照常抛出
+    （调用方记进清单、模块照常运行）；补搜失败只记进 `search_failed`。"""
+    mk = _mk(code)
+    slots = module_slots(module, code)
+    cap = PER_SLOT_US if mk == "us" else PER_SLOT
+    max_docs = (len(slots) + (EXTRA_THEMES if module == "value_chain" else 0)) * cap
+    res = OpenWebResult()
+    per_slot: dict[str, int] = {}
+    kw = dict(company=company, code=code, industry=industry, as_of=as_of, context=context or {})
+    raw = client(module_prompt(module, slots=slots, **kw))
+    _ingest(raw, slots, res, corpus, as_of, per_slot, cap, max_docs, company_hosts, module)
+    for _ in range(MODULE_RETRY):
+        empty = tuple(s for s in slots if not per_slot.get(s))
+        if not empty:
+            break
+        try:
+            raw = client(module_prompt(module, slots=empty, **kw))
+        except Exception as e:                              # noqa: BLE001
+            res.search_failed.append(f"{MODULE_NAME[module]}补搜：检索调用失败（{e.__class__.__name__}: {str(e)[:80]}）")
+            break
+        _ingest(raw, slots, res, corpus, as_of, per_slot, cap, max_docs, company_hosts, module)
+    res.missing_slots = [s for s in slots if not per_slot.get(s)]
+    return res
 
 
 def us_prompts(*, company: str, code: str, industry: str, as_of: date, business: str = "",
@@ -1116,29 +1276,11 @@ def _search_us(client, res: OpenWebResult, **kw) -> str:
     return "\n".join(parts)
 
 
-def gather(client, *, code: str, company: str, industry: str,
-           as_of: date, corpus, business: str = "", regulators: str = "",
-           company_hosts: tuple[str, ...] = ()) -> OpenWebResult:
-    """模型给网址 → 代码抓正文 → 入语料库。
-
-    **调用方必须传入已显式开启 WebSearch/WebFetch 工具的 client**，
-    例如 `make_client(tools=["WebSearch", "WebFetch"])`。不开不会报错，
-    只会安静地什么都搜不到 —— 与 web.search 同一条前提。
-    """
-    from ir_agent.market import is_us
-
-    us = bool(code) and is_us(code)
-    slots = slots_for(code)
-    per_slot_cap, max_docs = (PER_SLOT_US, MAX_DOCS_US) if us else (PER_SLOT, MAX_DOCS)
-    res = OpenWebResult()
-    if us:
-        raw = _search_us(client, res, company=company, code=code, industry=industry, as_of=as_of,
-                         business=business, regulators=regulators)
-    else:
-        raw = client(PROMPT.format(company=company or code, code=code, industry=industry or "未知",
-                                   per_slot=per_slot_cap, as_of=as_of.isoformat()))
+def _ingest(raw: str, slots: tuple[str, ...], res: OpenWebResult, corpus, as_of: date,
+            per_slot: dict[str, int], per_slot_cap: int, max_docs: int,
+            company_hosts: tuple[str, ...] = (), module: str = "") -> None:
+    """模型给的候选行 → 逐个抓正文 → 入语料库，记进 `res`。`per_slot` 由调用方持有（补搜时累计）。"""
     seen = {d.url for d in corpus.docs}
-    per_slot: dict[str, int] = {}
     # 去重键集合：存的是去掉 URL 前缀之后的诊断部分，不是完整消息——
     # 见 `OpenWebResult.fetch_failed_reasons` 字段注释。
     seen_diagnoses: set[str] = set()
@@ -1218,6 +1360,8 @@ def gather(client, *, code: str, company: str, industry: str,
             text=got.text,
             prompt_limit=TEXT_LIMIT,
             date_source="meta" if got.meta_published is not None else "model",
+            module=module,
+            scope=cand.scope,
         )
         if not corpus.add_if_visible(doc):
             continue
@@ -1228,6 +1372,32 @@ def gather(client, *, code: str, company: str, industry: str,
         res.docs.append(doc)
         if cand.extra and cand.slot not in res.extra_slots:
             res.extra_slots.append(cand.slot)
+
+
+
+def gather(client, *, code: str, company: str, industry: str,
+           as_of: date, corpus, business: str = "", regulators: str = "",
+           company_hosts: tuple[str, ...] = ()) -> OpenWebResult:
+    """模型给网址 → 代码抓正文 → 入语料库。
+
+    **调用方必须传入已显式开启 WebSearch/WebFetch 工具的 client**，
+    例如 `make_client(tools=["WebSearch", "WebFetch"])`。不开不会报错，
+    只会安静地什么都搜不到 —— 与 web.search 同一条前提。
+    """
+    from ir_agent.market import is_us
+
+    us = bool(code) and is_us(code)
+    slots = slots_for(code)
+    per_slot_cap, max_docs = (PER_SLOT_US, MAX_DOCS_US) if us else (PER_SLOT, MAX_DOCS)
+    res = OpenWebResult()
+    if us:
+        raw = _search_us(client, res, company=company, code=code, industry=industry, as_of=as_of,
+                         business=business, regulators=regulators)
+    else:
+        raw = client(PROMPT.format(company=company or code, code=code, industry=industry or "未知",
+                                   per_slot=per_slot_cap, as_of=as_of.isoformat()))
+    per_slot: dict[str, int] = {}
+    _ingest(raw, slots, res, corpus, as_of, per_slot, per_slot_cap, max_docs, company_hosts)
 
     # 缺口只按固定槽位判定 —— 额外槽位是模型的自由发挥，不能进缺口口径。
     res.missing_slots = [s for s in slots if not per_slot.get(s)]
@@ -1281,7 +1451,7 @@ def _doc_to_json(d: Document) -> dict:
             "published": d.published.isoformat(),
             "retrieved": d.retrieved.isoformat(), "text": d.text,
             "prompt_limit": d.prompt_limit, "date_source": d.date_source,
-            "rank": d.rank, "channel": d.channel}
+            "rank": d.rank, "channel": d.channel, "module": d.module, "scope": d.scope}
 
 
 def _str_field(raw: dict, key: str) -> str:
@@ -1360,7 +1530,10 @@ def _doc_from_json(raw: dict) -> Document:
                     date_source=_str_field(raw, "date_source")
                     if "date_source" in raw else "",
                     # 旧落盘文件没有 channel —— 缺省按本司公告读回
-                    channel=_str_field(raw, "channel") if "channel" in raw else "")
+                    channel=_str_field(raw, "channel") if "channel" in raw else "",
+                    # 旧落盘文件没有 module / scope —— 读成共用、无口径
+                    module=_str_field(raw, "module") if "module" in raw else "",
+                    scope=_str_field(raw, "scope") if "scope" in raw else "")
 
 
 def save(res: OpenWebResult, path: Path | str) -> None:
