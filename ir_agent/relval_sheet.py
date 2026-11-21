@@ -103,7 +103,9 @@ def _comps(res: RelvalResult, w: _W) -> None:
     scale, amt, shu, ps = _units(res)
     kinds = list(res.comps)
     ntm = "pe_ntm" in kinds
-    w.title("一、可比法（沿用原 6 家可比）")
+    w.title("一、可比法（各倍数按理论驱动从行业样本挑可比；不足四家时退回市值近邻）")
+    _comp_lists(res, w, kinds, scale)
+    w.row("市值近邻名单（分析阶段的可比坐标；驱动可比不足时的退路）", bold=True, fill=P_B)
     w.row("公司", "代码", f"市值（{amt}）", f"归母净利润（{amt}）", f"归母净资产（{amt}）",
           f"EBITDA（{amt}）", *(LABEL[k].replace("PE(TTM)", "PE") for k in kinds), "利润口径", "余额期",
           "EBITDA 口径", *(["NTM 口径"] if ntm else []), bold=True, fill=P_B)
@@ -134,7 +136,7 @@ def _comps(res: RelvalResult, w: _W) -> None:
     w.gap()
 
     w.row("倍数", "倍数 P25", "倍数 中位数", "倍数 P75", f"每股 P25（{ps}）", f"每股 中位数（{ps}）",
-          f"每股 P75（{ps}）", bold=True, fill=P_B)
+          f"每股 P75（{ps}）", "倍数 调和平均", f"每股 调和平均（{ps}）", bold=True, fill=P_B)
     formula = {"pe": "={m}*{np}/{sh}", "pb": "={m}*{eq}/{sh}",
                "ev_ebitda": "=({m}*{ebitda}-{debt}+{cash}-{min})/{sh}",
                "ev_sales": "=({m}*{rev}-{debt}+{cash}-{min})/{sh}", "pe_ntm": "={m}*{eps}"}
@@ -146,9 +148,40 @@ def _comps(res: RelvalResult, w: _W) -> None:
             continue
         r = w.r
         exprs = [formula[kind].format(m=f"{col}{r}", **cells) for col in "BCD"]
-        w.row(LABEL[kind], float(b.mult_lo), float(b.mult_mid), float(b.mult_hi), *exprs,
+        hm = ([float(b.mult_hm), formula[kind].format(m=f"H{r}", **cells)]
+              if b.mult_hm is not None else ["—", "—"])
+        w.row(LABEL[kind], float(b.mult_lo), float(b.mult_mid), float(b.mult_hi), *exprs, *hm,
               fmt=NUM)
     w.gap()
+
+
+def _comp_lists(res: RelvalResult, w: _W, kinds: list[str], scale) -> None:
+    """每个倍数实际用的可比名单：业务距离、各驱动取值、基本面距离、该倍数（spec 2026-11-21 §2）。"""
+    from ir_agent.relval import _BD_LABEL, DRIVERS, _market
+
+    bd_cn = _BD_LABEL[_market(res.target.code)]
+    for kind in kinds:
+        peers = res.comps_by_kind.get(kind)
+        if not peers:
+            continue
+        sel = {c: (bd, ds) for c, bd, ds in res.selection.get(kind, [])}
+        how = "按驱动挑选" if sel else "市值近邻"
+        drv = DRIVERS[kind]
+        w.row(f"可比名单：{LABEL[kind]}（{how}）", bold=True, fill=P_B)
+        w.row("公司", "代码", "业务距离", *(_XNAME[d] for d in drv), "基本面距离", LABEL[kind], bold=True)
+        t = res.target
+        w.row("本司", t.code, "—", *(_f(getattr(t, d)) for d in drv), "—",
+              _f(multiples(t)[kind]), fmt=NUM)
+        for p in peers:
+            bd, ds = sel.get(p.code, (None, None))
+            w.row(p.name, p.code, bd_cn.get(bd, "—") if bd is not None else "—",
+                  *(_f(getattr(p, d)) for d in drv), ds if ds is not None else "—",
+                  _f(multiples(p)[kind]), fmt=NUM)
+        w.gap()
+
+
+def _f(v):
+    return float(v) if v is not None else "—"
 
 
 def _regression(res: RelvalResult, w: _W, kind: str) -> tuple | None:
@@ -166,6 +199,13 @@ def _regression(res: RelvalResult, w: _W, kind: str) -> tuple | None:
                         ("斜率 t 值", r.t, NUM), ("样本数 n", r.n, "0"),
                         ("残差标准误 s", r.s, NUM)):
         w.row(label, v, fmt=f)
+    for d, c in r.coefs.items():
+        w.row(f"系数：{_XNAME[d]}", c, fmt=NUM)
+        w.row(f"t 值：{_XNAME[d]}", r.ts.get(d), fmt=NUM)
+    for d in r.dropped:
+        w.row(f"未进回归：{_XNAME[d]}", "样本里没有差异（或与主驱动共线），退化为少一个自变量")
+    if r.expanded:
+        w.row("样本扩大", f"行业样本不足，扩大到{r.expanded}（只用于回归，不用于可比名单）")
     w.row(f"本司{_XNAME[xf]}", r.x0, fmt=PCT)
     if r.fit_mult is not None:
         w.row("应得倍数", r.fit_mult, fmt=X2)
@@ -185,8 +225,11 @@ def _regression(res: RelvalResult, w: _W, kind: str) -> tuple | None:
     r1 = w.r - 1
     # 拟合线两端（散点图的折线系列）与本司点
     xs = [v[2] for v in r.sample] or [0.0]
-    l0 = w.row("拟合线", "", min(xs), r.a + r.b * min(xs), fmt=NUM)
-    l1 = w.row("拟合线", "", max(xs), r.a + r.b * max(xs), fmt=NUM)
+    # 多元：拟合线画主驱动的偏效应，其余驱动取样本均值
+    a0 = r.a + sum(c * (sum(row[r.xnames.index(d)] for row in r.xsample) / len(r.xsample))
+                   for d, c in r.coefs.items() if d != xf and r.xsample and d in r.xnames)
+    l0 = w.row("拟合线", "", min(xs), a0 + r.b * min(xs), fmt=NUM)
+    l1 = w.row("拟合线", "", max(xs), a0 + r.b * max(xs), fmt=NUM)
     tm = multiples(res.target)[yk]
     tr = w.row("本司", res.target.code, r.x0, float(tm) if tm is not None else None)
     for code, nm, why in r.excluded:
