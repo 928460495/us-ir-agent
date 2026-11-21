@@ -2913,6 +2913,8 @@ def test_本分支新增的清单生产者逐个断言渲染标记(monkeypatch, 
                              "前缀「开放网络资料采集（」已登记；缺文件 / 零文档 / 损坏是真缺口，落「未生成」是对的；"
                              "行为断言在 tests/test_staged_collection_restore.py"),
         "_restore_openweb_legacy": "原 _restore_openweb 原样改名（读改动前的 openweb.json），措辞未变",
+        "_track_macro": ("只产出真缺口条目（检索未执行、未能落盘、单个指标检索失败），落默认分支「未生成」"
+                         "是对的；读数本身写进宏观产物、不进清单。行为断言在 tests/test_macro_track.py"),
         "_method_review_lines": ("不是终端清单的生产者：返回 review.md 与 "
                                  "assumptions.md 的「方法论审核」行，不进 skipped"),
         "_review_factor_lines": ("不是终端清单的生产者：返回 review.md 的 markdown "

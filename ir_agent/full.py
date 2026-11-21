@@ -335,6 +335,37 @@ def _chain_context(strategy_md: str) -> str:
                      if "供应商议价能力" in x or "买方议价能力" in x)
 
 
+def _track_macro(code: str, r, as_of: date, out: Path, client, md: dict, pr: dict) -> list[str]:
+    """宏观审核通过后按 `跟踪:` 行定向取最新读数（spec 2026-11-21-staged-collection §4），追加到宏观产物、
+    落盘 `macro_track.json`。重跑时沿用已检索的指标，只补搜人工新增的。返回清单条目。"""
+    from ir_agent import macro_track as MT
+    from ir_agent import macro_view as MV
+    from ir_agent.market import is_us
+
+    f = out / "macro_view.md"
+    if not f.exists():
+        return []
+    view = MV.parse(f.read_text(encoding="utf-8"))
+    if not view.tracks:
+        return []
+    done = MT.load(out / MT.TRACK_JSON, None)
+    try:
+        res = MT.track(client, view, industry=_industry_path(code), as_of=as_of, corpus=r.corpus,
+                       us=bool(code) and is_us(code), done=done)
+    except Exception as e:                                  # noqa: BLE001
+        return [f"宏观跟踪指标检索未执行（{e.__class__.__name__}: {str(e)[:120]}）"]
+    notes: list[str] = []
+    try:
+        MT.save(res, out / MT.TRACK_JSON)
+    except OSError as e:
+        notes.append(f"宏观跟踪指标未能落盘（{e.__class__.__name__}）——第二阶段读不到这些读数")
+    block = MT.summary(res)
+    md["宏观定性"] = md["宏观定性"] + "\n" + block
+    pr["宏观定性"] = (pr.get("宏观定性") or "") + "\n" + block
+    _refresh_external_md(r, md)
+    return notes + [f"宏观跟踪指标检索失败：{x}" for x in res.failed]
+
+
 def _collect_module(module: str, code: str, r, as_of: date, out: Path | None, client,
                     context: dict[str, str]) -> list[str]:
     """一个定性模块开工前的开放网络采集。`openweb_<模块>.json` 已在 → 读回、不重采（第一次调用重跑时，
@@ -585,6 +616,7 @@ def _restore_openweb(r, out: Path) -> list[str]:
     files = [(m, out / f"openweb_{m}.json") for m in openweb.MODULES]
     if not any(f.exists() for _, f in files):
         return _restore_openweb_legacy(r, out)
+    from ir_agent import macro_track as MT
     if r.corpus is None:
         r.corpus = Corpus(as_of=r.as_of)
     code = getattr(r, "code", "") or ""
@@ -603,6 +635,7 @@ def _restore_openweb(r, out: Path) -> list[str]:
         else:
             notes.append(f"开放网络资料（{label}）：{label}：未跨阶段存活（落盘文件读不出文档，可能已损坏或为空），"
                          "外部引文可能核验不过")
+    MT.load(out / MT.TRACK_JSON, r.corpus)      # 宏观跟踪指标的文章（没有这份文件 = 没有跟踪指标）
     return notes
 
 
@@ -1968,6 +2001,8 @@ def _analyse_qualitative(code: str, r, as_of: date, model,
 
     collect("macro", {"关注的传导渠道": _CHANNELS_HINT, "本行业监管机构": us_ctx.get("regulators", "")})
     take("宏观定性", lambda: _load_macro_view(r, as_of, qual_client, pr["宏观"], **kw))
+    if online and out is not None and md.get("宏观定性"):     # 审核没通过（QualStop）时为空 —— 不检索
+        skipped.extend(_track_macro(code, r, as_of, out, research_client, md, pr))
     collect("strategy", {"主要对手": _rivals(r)})
     take("战略", lambda: _load_strategy(r, as_of, qual_client, spot, **kw))
     collect("value_chain", {"战略结论（供应商与买方议价）": _chain_context(md.get("战略", ""))})
