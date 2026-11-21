@@ -283,7 +283,15 @@ class Corpus:
             self.skipped.append(f"{doc.title}（{doc.published}）")
             return False
 
-    def prompt_docs(self, company_limit: int | None = None) -> list[Document]:
+    def visible(self, module: str | None) -> list[Document]:
+        """某个定性模块看得见的文档：共用（module 为空：研报、公告、申报、旧产物）+ 本模块采集的。
+        `module` 为 None 时是全部（第二次调用及以后）。spec 2026-11-21-staged-collection §6。"""
+        if module is None:
+            return list(self.docs)
+        return [d for d in self.docs if d.module in ("", module)]
+
+    def prompt_docs(self, company_limit: int | None = None,
+                    module: str | None = None) -> list[Document]:
         """进提示词的文档。**只截断 COMPANY 级，其余分级照旧全给。**
 
         入库的公告不再限 8 篇之后，三个定性模块若仍
@@ -311,11 +319,12 @@ class Corpus:
         # 定性三节读到的是股东会决议与律师意见书，而投资建设覆铜板项目、
         # 年度业绩快报排在后面被截掉。档位来自交易所分类代码，见
         # `announce.type_tier`。
-        company = sorted((d for d in self.docs if d.tier is Tier.COMPANY),
+        pool = self.visible(module)
+        company = sorted((d for d in pool if d.tier is Tier.COMPANY),
                          key=lambda d: (d.rank, -d.published.toordinal())
                          )[:company_limit]
         keep = {id(d) for d in company}
-        return [d for d in self.docs
+        return [d for d in pool
                 if d.tier is not Tier.COMPANY or id(d) in keep]
 
     def by_tier(self, tier: Tier) -> list[Document]:

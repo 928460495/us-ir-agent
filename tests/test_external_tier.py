@@ -214,7 +214,8 @@ def test_结构哨兵_openweb模块任何函数都不得访问TierCOMPANY属性(
     # 2026-11-15 决定）。域名来自代码亲手取回的 10-K「Available Information」一句，不来自
     # 模型，也不是 openweb.py 里的写死名单 —— 「分级跟着取回方式走」不变。模型自报机构名
     # 拔不到 COMPANY，由 test_company_domain 的行为测试守。
-    exempt = {"gather"}
+    # 2026-11-21：逐候选入库从 `gather` 抽成 `_ingest`（按模块采集共用），豁免随之移过去，逻辑不变。
+    exempt = {"_ingest"}
     for fn in _defined_functions(openweb):
         if fn.__qualname__ in exempt:
             continue

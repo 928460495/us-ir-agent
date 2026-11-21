@@ -1870,6 +1870,10 @@ def _qual_catalog(r, as_of: date) -> str:
         return ""
 
 
+# 定性模块落盘前缀 → 采集模块键（指纹只对该模块看得见的文档取，spec 2026-11-21-staged-collection §6）
+_MODULE_OF = {"macro_view": "macro", "strategy": "strategy", "value_chain": "value_chain"}
+
+
 def _qual_module(out: Path, *, prefix: str, label: str, corpus, parse, facts, run):
     """一个定性模块的落盘、沿用与停下（spec 五）。返回 (结论, 审核状态)。
 
@@ -1893,7 +1897,7 @@ def _qual_module(out: Path, *, prefix: str, label: str, corpus, parse, facts, ru
             view.review = ReviewResult.from_json(rec)
             status.update(state="沿用审核结论", rounds=view.review.rounds,
                           flagged=[v.line() for v in view.review.flagged()])
-            if rec.get("corpus", "") != Q.corpus_fingerprint(corpus):
+            if rec.get("corpus", "") != Q.corpus_fingerprint(corpus, _MODULE_OF.get(prefix)):
                 # 转述文章不在语料库由读数记在 read_notes（parse 已按本轮语料库重读），一并计入。
                 n = sum(1 for x in [*(view.read_notes or []), *facts(view)]
                         if x.startswith("依据核验不过") or "不在语料库" in x)
@@ -1916,7 +1920,7 @@ def _qual_module(out: Path, *, prefix: str, label: str, corpus, parse, facts, ru
     res_f.write_text(raw, encoding="utf-8")
     failed_f.unlink(missing_ok=True)       # 上一轮停下留的底稿已过时
     review_f.write_text(Q.dump(view.review, passed=True,
-                               corpus_fp=Q.corpus_fingerprint(corpus)), encoding="utf-8")
+                               corpus_fp=Q.corpus_fingerprint(corpus, _MODULE_OF.get(prefix))), encoding="utf-8")
     rounds_f.write_text(Q.AR.rounds_markdown(view.rounds, title=f"{label}审核",
                                              author="撰写者"), encoding="utf-8")
     status.update(state="审核通过", rounds=view.review.rounds,
