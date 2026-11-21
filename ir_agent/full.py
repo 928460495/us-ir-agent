@@ -862,7 +862,8 @@ def _load_macro_view(r, as_of: date, client, macro_pr: str, *, out: Path | None 
 
     def run():
         return MV.assess(client, r.corpus, r.ledger, as_of, macro_pr,
-                         judge=client, catalog=catalog)[0]
+                         judge=client, catalog=catalog,
+                         sensitivity=MV.sensitivity_block(r.ledger, r.period, as_of))[0]
     if out is None:
         view = run()
     else:
@@ -1394,6 +1395,9 @@ def _industry_profile(peers, agg, cache, r, as_of: date) -> tuple[str, str]:
         industry_yoy=ind_yoy, gdp_yoy=gdp_yoy,
         gdp_cagr=gdp_cagr, margin_history=margins)
     for f in ip.profile_facts(prof):
+        r.ledger.put(f)
+    # 本公司的宏观暴露（经营杠杆、净负债率），宏观敏感度段引用（spec 2026-11-21-staged-collection §5.1）
+    for f in ip.company_exposure_facts(r.ledger, r.period, as_of):
         r.ledger.put(f)
 
     # ── 传导 ──────────────────────────────────────────────
