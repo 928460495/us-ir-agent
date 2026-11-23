@@ -378,3 +378,19 @@ def test_相对估值摘要说明EV_EBITDA用TTM与可比表年报口径不同()
     line = next(x for x in res.summary().splitlines() if "可比表" in x and "TTM" in x)
     assert "年报" in line and audit_bare_numbers(line) == []
     assert not any("可比表" in x and "TTM" in x for x in make_result(comps_missing=True).summary().splitlines())
+
+
+# ── 茅台实跑（2026-11-22）：不可用回归的统计量被研报当成「统计上较强」的证据 ──────────
+def test_不可用回归的统计量注明不作依据():
+    res = make_result()
+    res.regs["pb_roe"] = regress("pb_roe", _pb_sample(n=15), _tgt(roe=D("0.15")), D(1))
+    line = next(x for x in res.summary().split("\n") if "不可用" in x)
+    assert "rel_reg_pb_r2" in line and "统计量只说明为什么不可用，不作依据" in line
+
+
+def test_撰写规则禁止拿不可用回归的统计量作论据():
+    from ir_agent import analyst
+    src = analyst.build_prompt.__code__.co_consts
+    text = "".join(c for c in src if isinstance(c, str)) + "".join(
+        v for v in vars(analyst).values() if isinstance(v, str))
+    assert "不可用的回归" in text and "不得据此说回归" in text
