@@ -223,7 +223,12 @@ def _dcf_kw(r) -> dict:
     if not is_us(getattr(r, "code", "") or "000000"):
         # A 股：年报网址 —— 估值层读附注判定非经营性金融资产（spec 2026-11-20-nonop-financial-assets）
         url = getattr(r, "annual_url", "") or ""
-        return {"annual_url": url} if url else {}
+        kw = {"annual_url": url} if url else {}
+        # 申万路径：研发资本的摊销年限按它映射（spec 2026-11-24）。取分析层已有的分类，不再联网
+        path = getattr(getattr(getattr(r, "peer_set", None), "classification", None), "used_path", "") or ""
+        if path:
+            kw["industry"] = path
+        return kw
     m = r.sec_meta or {}
     return {"us_ctx": {"store": r.store, "companyfacts_sid": m.get("companyfacts_sid"),
                        "submissions_sid": m.get("submissions_sid"), "fye": m.get("fye", "")}}
