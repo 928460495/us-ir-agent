@@ -387,6 +387,9 @@ def calibrate(symbol: str, nyears: int = 5, fade_years: int | None = None, *,
                  # 终值 ROIC 默认收敛至 WACC + 溢价、终值 Beta 向 1（spec 2026-11-16，Damodaran / 麦肯锡 RONIC）
                  roic_mode=2, beta_term=1.0),
         rdcap=dict(**rdcap, rd_hist=[round(_rd_all[k], 1) for k in sorted(_rd_all)][-8:],
+                   # 每个年报期按「截至该年的研发历史」资本化（比率页历史列用，终审 I1/C1）
+                   by_period={k: {kk: VL.capitalize_rd([_rd_all[j] for j in sorted(_rd_all) if j <= k], _life)[kk]
+                                  for kk in ("asset", "amort")} for k in sorted(_rd_all) if k <= last},
                    ic_reported=round(ic["operating"], 1), ic_financing=round(ic["financing"], 1),
                    ic_gap=ic["gap"], ic_rdcap=round(o["ic_rdcap"], 1)),
         erp_info=erp_i, interim=itm, interim_skip=itm_skip, geo=geo,

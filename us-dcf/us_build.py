@@ -904,15 +904,28 @@ def _statements(wb, cal, path):
     eb(30, "Net debt 净负债", None, lambda c, i: f"={c}18+{c}19+{c}21-{c}6-{c}7", NUM, False,
        "有息负债 − 现金 − 短期投资。经营租赁负债【不】计入（ASC 842 下租金已在 EBIT 内扣除）")
     eb(31, "NWC 营运资本", None, lambda c, i: f"={c}8+{c}9+{c}10-{c}20-{c}22")
+    # 历史年报列的研发资本与摊销（终审 C1/I1）：校准给的 by_period 优先；旧校准只有最近 8 年 rd_hist（末项对齐基期年），
+    # 按年份倒推。此前历史列只有基期的研发资本一格有值，比率页基期列算成 (EBIT(1−t)+研发−空)/(空+研发资本)（AAPL 145%）
+    _RC = cal.get("rdcap") or {}
+    _BP = dict(_RC.get("by_period") or {})
+    if not _BP and _RC.get("rd_hist"):
+        import valuation_lib as _VL
+        _h = list(_RC["rd_hist"]); _L = int(DC.get("rd_life", 5) or 5)
+        for j, e in enumerate(reversed(ENDS)):
+            if j < len(_h):
+                _c = _VL.capitalize_rd(_h[:len(_h) - j], _L)
+                _BP[e] = {"asset": _c["asset"], "amort": _c["amort"]}
     # ---- 备查行（不进资产总计，不影响平衡校验）----
     # Damodaran 的研发资本是【报表外调整】：把它塞进资产会破坏与申报报表的对账关系。
     eb(32, "〔备查〕研发摊销 R&D amortization", None,
        lambda c, i: f"={pc(c)}33/{A}!$B${DR['研发摊销年限（年）']}", NUM, False,
-       "上期研发资本 ÷ 摊销年限（直线法近似逐年归集口径）")
+       "上期研发资本 ÷ 摊销年限（直线法近似逐年归集口径）。历史列为按校准年限算的静态值",
+       hist=[(_BP.get(ENDS[i]) or {}).get("amort") if i < len(ENDS) else None for i in range(NH)])
     eb(33, "〔备查〕研发资本 Research asset", None,
        lambda c, i: f"={pc(c)}33+{P}!{c}{RRD}-{c}32", NUM, False,
-       "期初 + 本期研发费用 − 本期摊销（基期值由「1_假设」的期初研发资本给定）",
-       hist=[None] * (NH - 1) + [round(float(O.get("rd_asset", 0.0)), 2)])
+       "期初 + 本期研发费用 − 本期摊销（基期值由「1_假设」的期初研发资本给定；历史列为截至该年资本化的静态值）",
+       hist=[(_BP.get(ENDS[i]) or {}).get("asset") if i < len(ENDS) else None for i in range(NH - 1)]
+            + [round(float(O.get("rd_asset", 0.0)), 2)])
     eb(34, "〔备查〕投入资本 IC（申报口径）", None,
        lambda c, i: f"={c}31+{c}12+{c}14+{c}15-{c}23", NUM, True,
        "营运资本 + 固定资产 + 商誉无形 + 其他非流动资产 − 其他非流动负债。"
@@ -922,6 +935,11 @@ def _statements(wb, cal, path):
        lambda c, i: f"={c}34+IF({A}!$B${DR['研发资本化开关（1=开 0=关）']}=1,{c}33,0)", NUM, True)
     eb(36, "〔备查〕生效投入资本 IC", None,
        lambda c, i: f"={c}35", NUM, True, "供 DCF 终值使用")
+    for _i in range(NH):                       # 历史列也写本列公式（此前为空，比率页历史 ROIC 无从计算）
+        _c = CL(2 + _i)
+        for _rw, _fx in ((31, f"={_c}8+{_c}9+{_c}10-{_c}20-{_c}22"), (34, f"={_c}31+{_c}12+{_c}14+{_c}15-{_c}23"),
+                         (35, f"={_c}34+IF({A}!$B${DR['研发资本化开关（1=开 0=关）']}=1,{_c}33,0)"), (36, f"={_c}35")):
+            wb_[f"{_c}{_rw}"].value = _fx; wb_[f"{_c}{_rw}"].number_format = NUM
 
     # ---------- 4_CashFlow（行号固定 6..30）----------
     wk = sheet("4_CashFlow", "2E75B6")
@@ -1668,14 +1686,15 @@ def _ratios(wb, cal, D_):
     ROWS["roic_rd"] = r
     r = line(r, "ROIC（研发资本化）",
              lambda c, p, i, _r=ROWS["roic_rep"]: IE(
-                 f'IF({_SW}<>1,{c}{_r},IF({B_}!{c}33="","",'
+                 f'IF({_SW}<>1,{c}{_r},IF(OR({B_}!{c}33="",{B_}!{c}32=""),"",'
                  f'({P}!{c}{REBIT}*(1-{DS}!$B${D_["TT"]})+{P}!{c}{_RRD}-{B_}!{c}32)/({B_}!{c}34+{B_}!{c}33)))'),
              PCT, False, "（EBIT×(1−t) + 研发 − 研发摊销）÷（申报口径 IC + 研发资本）。Damodaran 口径；开关关闭时同报表口径")
     ROWS["roic"] = r
     _rr, _rd = ROWS["roic_rep"], ROWS["roic_rd"]
     r = line(r, "ROIC（税后 / 生效投入资本）",
-             lambda c, p, i: f'=IF(AND({_SW}=1,{c}{_rd}<>""),{c}{_rd},{c}{_rr})',
-             PCT, True, "生效口径：研发资本化开关打开时取「研发资本化」行，否则取「报表口径」行")
+             lambda c, p, i: f'=IF({_SW}=1,{c}{_rd},{c}{_rr})',
+             PCT, True, "生效口径：研发资本化开关打开时取「研发资本化」行（没有研发资本的列留空，不退回报表口径），"
+                        "否则取「报表口径」行")
     ROWS["wacc"] = r
     r = line(r, "WACC（基准线）", lambda c, p, i: f"={DS}!$B${D_['WC']}", PCT, False,
              "ROIC 高于 WACC 才创造价值")

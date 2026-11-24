@@ -89,3 +89,49 @@ def test_旧工作簿按申报口径NOPAT验算():
     rows, dv = V.recompute(inp)
     assert dv["nopat_adj"] == pytest.approx(rows[-1]["ebit"] * (1 - inp["dcf"]["终值所得税率 t_term"]), rel=1e-12)
     assert V.verify(fix, quiet=True)[0] == []
+
+
+# ── 终审 C1 / I1（2026-11-24）：历史列与基期列的研发资本化 ROIC ──────────────
+
+def _calc(path):
+    import formulas
+    import os
+    name = os.path.basename(path)
+    sol = formulas.ExcelModel().loads(path).finish().calculate()
+    raw = load_workbook(path)
+
+    def G(sh, cell):
+        for k in (f"'[{name}]{sh.upper()}'!{cell}", f"'[{name}]{sh}'!{cell}", f"'[{name.upper()}]{sh.upper()}'!{cell}"):
+            v = sol.get(k)
+            if v is not None:
+                x = v.value[0, 0]
+                try:
+                    return float(x)
+                except (TypeError, ValueError):
+                    return x
+        v = raw[sh][cell].value                         # 未被引用的常数格不在引擎结果里
+        return float(v) if isinstance(v, (int, float)) else v
+    return G
+
+
+def test_C1_基期与历史列研发资本化ROIC按公式且非离谱(tmp_path):
+    from openpyxl.utils import get_column_letter as CL
+    cal = _cal(1, 2)
+    p = _build(tmp_path, cal, "c1.xlsx")
+    wb = load_workbook(p)
+    G = _calc(p)
+    rs = wb["7_Ratios"]
+    rows = {rs.cell(r, 1).value: r for r in range(1, rs.max_row + 1) if rs.cell(r, 1).value}
+    r_rep, r_rd, r_eff = rows["ROIC（报表口径）"], rows["ROIC（研发资本化）"], rows["ROIC（税后 / 生效投入资本）"]
+    nh = len(cal["periods"]["annual"])
+    ref = cal["_ref"]
+    for i in range(nh):
+        c = CL(2 + i)
+        am, asset, ic = G("3_Balance", f"{c}32"), G("3_Balance", f"{c}33"), G("3_Balance", f"{c}34")
+        assert isinstance(am, float) and isinstance(asset, float) and isinstance(ic, float), c
+        rep, rd = G("7_Ratios", f"{c}{r_rep}"), G("7_Ratios", f"{c}{r_rd}")
+        nopat = rep * ic
+        exp = (nopat + G("2_Income", f"{c}{ref['RRD']}") - am) / (ic + asset)
+        assert rd == pytest.approx(exp, rel=1e-9)
+        assert G("7_Ratios", f"{c}{r_eff}") == pytest.approx(rd, rel=1e-12)
+    assert rd < 1.0                                       # AAPL 基期：此前算出 145%
