@@ -1003,7 +1003,7 @@ def _statements(wb, cal, path):
                      f"+{c}16+SUM({c}10:{c}14)"), NUM, True,
        "EBIT×(1−t) + 折旧 + 摊销 [+ SBC 仅在加回口径下] − 资本开支 + 营运资本变动")
     cal["_ref"] = dict(RV=RV, RC=RC, RGP=RGP, REBIT=REBIT, RPBT=RPBT, RTAX=RTAX, RNI=RNI,
-                       RMI=RMI, RNIP=RNIP, RSH=RSH, REPS=REPS, RSBC=RSBC, RIE=RIE, RII=RII)
+                       RMI=RMI, RNIP=RNIP, RSH=RSH, REPS=REPS, RSBC=RSBC, RIE=RIE, RII=RII, RRD=RRD)
     return _dcf_sheet(wb, cal, path)
 
 
@@ -1117,8 +1117,13 @@ def _dcf_sheet(wb, cal, path):
                      "报表外调整项：不进资产总计，只用于投入资本与 ROIC")
     ICr = r; r = put(r, "生效投入资本 IC",
                      f"=B{ICBr}+IF({A}!$B${DR['研发资本化开关（1=开 0=关）']}=1,B{TRr},0)", NUM, True)
-    RBr = r; r = put(r, "终值 ROIC（计算值）", f"=B{TEr}*(1-B{TTr})/B{ICr}", PCT2, False,
-                     "把末年超额回报直接永续化")
+    NAr = r; r = put(r, "调整后 NOPAT = EBIT×(1−t_term) + 研发 − 研发摊销",
+                     f"=B{TEr}*(1-B{TTr})+IF({A}!$B${DR['研发资本化开关（1=开 0=关）']}=1,"
+                     f"{P}!{CC[-1]}{RF['RRD']}-{B_}!{CC[-1]}32,0)", NUM, False,
+                     "Damodaran：研发全额抵扣，税盾保留，故不是 (EBIT+研发−摊销)×(1−t)。只用于终值 ROIC；"
+                     "终值 FCFF 与降级时的终值 NOPAT 仍按申报口径（资本化不改现金流）")
+    RBr = r; r = put(r, "终值 ROIC（计算值）", f"=B{NAr}/B{ICr}", PCT2, False,
+                     "调整后 NOPAT / 生效 IC。把末年超额回报直接永续化")
     RCr = r; r = put(r, "终值 ROIC（收敛口径）",
                      f"=B{WTr}+{A}!$B${DR['终值 ROIC 收敛溢价（模式2 用）']}", PCT2, False,
                      "竞争终将侵蚀超额回报：终值 ROIC = 终值 WACC + 溢价")
@@ -1128,8 +1133,8 @@ def _dcf_sheet(wb, cal, path):
     RRr = r; r = put(r, "稳态再投资率 RR = g / ROIC", f"=B{GTr}/B{ROr}", PCT2, True,
                      "Damodaran：g = RR × ROIC，三者不可自由设定")
     NPr = r; r = put(r, "终值 NOPAT = EBIT × (1 − t_term)", f"=B{TEr}*(1-B{TTr})", NUM, False,
-                     "用【申报口径】NOPAT：研发资本化只调 ROIC 与 IC，不调 FCFF。"
-                     "稳态下研发支出≈研发摊销，两种口径的 NOPAT 收敛，故此处一致")
+                     "降级时用【申报口径】NOPAT：研发资本化不改现金流；ROIC 用上方调整后 NOPAT（2026-11-24 修正："
+                     "此前 ROIC 也用申报口径，研发增长时研发 > 摊销，ROIC 被低估）")
     DEr = r; r = put(r, "★ 终值是否降级（1=是）",
                      f"=IF(OR(B{ICr}<=0,B{ROr}<=B{WTr},B{RRr}>=1,B{RRr}<0),1,0)", "0", True,
                      "投入资本为负、或 ROIC ≤ WACC、或再投资率越界时，Gordon 式的 (1−g/ROIC) "
@@ -1230,7 +1235,7 @@ def _dcf_sheet(wb, cal, path):
             wt = f"($A{r}-($B${BEr}-$B${BTr})*$B${ERr}*(1-$B${WDr}))"
             roic = (f"IF({A}!$B${DR['终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）']}=2,"
                     f"{wt}+{A}!$B${DR['终值 ROIC 收敛溢价（模式2 用）']},"
-                    f"($B${TEr}*(1-$B${TTr})/$B${ICr}))")
+                    f"($B${NAr}/$B${ICr}))")              # 调整后 NOPAT / 生效 IC，与终值节同口径
             rr_ = f"({col}${SHROW}/{roic})"
             nopat = f"($B${TEr}*(1-$B${TTr}))"
             deg = f"OR($B${ICr}<=0,{roic}<={wt},{rr_}>=1,{rr_}<0)"
@@ -1432,9 +1437,12 @@ def _engine(wb, cal, D_):
                                        f"+$B${AR['其他非流动资产净额']}"
                                        f"+IF($B${AR['研发资本化开关']}=1,{yc(NY,8)}{r},0)")
                 w[f"{SC['NOPAT']}{r}"] = f"={yc(NY,2)}{r}*(1-$B${AR['终值税率']})"
+                # ROIC 分子用调整后 NOPAT（加回本行末年研发、扣本行末年研发摊销）；降级 TV 仍用申报口径 NOPAT
+                _nadj = (f"({SC['NOPAT']}{r}+IF($B${AR['研发资本化开关']}=1,"
+                         f"{yc(NY,0)}{r}*{A}!$E${RDR+NY-1}-{p_rda}/$B${AR['研发摊销年限']},0))")
                 w[f"{SC['ROIC']}{r}"] = (f"=IF($B${AR['终值ROIC模式']}=2,"
                                          f"{wt}+$B${AR['终值ROIC溢价']},"
-                                         f"IF({SC['IC']}{r}=0,0,{SC['NOPAT']}{r}/{SC['IC']}{r}))")
+                                         f"IF({SC['IC']}{r}=0,0,{_nadj}/{SC['IC']}{r}))")
                 w[f"{SC['RR']}{r}"] = f"=IF({SC['ROIC']}{r}=0,9,{gtexp}/{SC['ROIC']}{r})"
                 w[f"{SC['DEG']}{r}"] = (f"=IF(OR({SC['IC']}{r}<=0,{SC['ROIC']}{r}<={wt},"
                                         f"{SC['RR']}{r}>=1,{SC['RR']}{r}<0),1,0)")
@@ -1652,10 +1660,22 @@ def _ratios(wb, cal, D_):
              PCT, True, "回购大户的账面权益被冲小，ROE 会失真（AAPL 达 171%）——"
                         "这类公司应以 ROIC 为锚")
     r = line(r, "ROA（净利 / 平均总资产）", lambda c, p, i: IE(f"{P}!{c}{RNI}/{avg(B_,16,c,p)}"))
+    _A = "'1_Assumptions'"; _SW = f"{_A}!$B${R['DR']['研发资本化开关（1=开 0=关）']}"; _RRD = RF["RRD"]
+    ROWS["roic_rep"] = r
+    r = line(r, "ROIC（报表口径）",
+             lambda c, p, i: IE(f"{P}!{c}{REBIT}*(1-{DS}!$B${D_['TT']})/{B_}!{c}34"),
+             PCT, False, "EBIT×(1−t) ÷ 申报口径投入资本")
+    ROWS["roic_rd"] = r
+    r = line(r, "ROIC（研发资本化）",
+             lambda c, p, i, _r=ROWS["roic_rep"]: IE(
+                 f'IF({_SW}<>1,{c}{_r},IF({B_}!{c}33="","",'
+                 f'({P}!{c}{REBIT}*(1-{DS}!$B${D_["TT"]})+{P}!{c}{_RRD}-{B_}!{c}32)/({B_}!{c}34+{B_}!{c}33)))'),
+             PCT, False, "（EBIT×(1−t) + 研发 − 研发摊销）÷（申报口径 IC + 研发资本）。Damodaran 口径；开关关闭时同报表口径")
     ROWS["roic"] = r
+    _rr, _rd = ROWS["roic_rep"], ROWS["roic_rd"]
     r = line(r, "ROIC（税后 / 生效投入资本）",
-             lambda c, p, i: IE(f"{P}!{c}{REBIT}*(1-{DS}!$B${D_['TT']})/{B_}!{c}36"),
-             PCT, True, "投入资本用「生效 IC」（含研发资本，若开关打开）")
+             lambda c, p, i: f'=IF(AND({_SW}=1,{c}{_rd}<>""),{c}{_rd},{c}{_rr})',
+             PCT, True, "生效口径：研发资本化开关打开时取「研发资本化」行，否则取「报表口径」行")
     ROWS["wacc"] = r
     r = line(r, "WACC（基准线）", lambda c, p, i: f"={DS}!$B${D_['WC']}", PCT, False,
              "ROIC 高于 WACC 才创造价值")

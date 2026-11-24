@@ -172,7 +172,8 @@ def simulate(inp: dict, P: dict) -> dict:
         capex = rev * np.clip(cx_live[t] + dcx, 0.0, None) + fcx
         ppe = ppe + capex - dep
         gwi = gwi - amt
-        rda = rda + rev * rd_live[t] - rda / life
+        rdx = rev * rd_live[t]; rdam = rda / life
+        rda = rda + rdx - rdam
         nwc = (rev * G["应收周转天数 DSO"] / 365 + cogs * G["存货周转天数 DIO"] / 365
                + rev * G["其他流动资产 / 营收"] - cogs * G["应付周转天数 DPO"] / 365
                - rev * G["其他流动负债 / 营收"])
@@ -186,8 +187,10 @@ def simulate(inp: dict, P: dict) -> dict:
     tt = D["终值所得税率 t_term"]
     ic = (nwc + ppe + gwi + o["其他非流动资产"] - o["其他非流动负债"]
           + (rda if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0))
-    nopat_T = ebit * (1 - tt)
-    roic_calc = np.where(ic != 0, nopat_T / np.where(ic != 0, ic, 1.0), np.inf)
+    nopat_T = ebit * (1 - tt)          # 申报口径：降级时的终值用它
+    # 调整后 NOPAT 只用于 ROIC（与 verify.recompute 同式，spec 2026-11-24）
+    nopat_adj = nopat_T + ((rdx - rdam) if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0)
+    roic_calc = np.where(ic != 0, nopat_adj / np.where(ic != 0, ic, 1.0), np.inf)
     roic = (WT + D["终值 ROIC 收敛溢价（模式2 用）"]
             if D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"] == 2 else roic_calc)
     rr = np.where(roic > 0, gt / np.where(roic > 0, roic, 1.0), np.inf)

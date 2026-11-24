@@ -357,7 +357,7 @@ def recompute(inp: dict):
                          ta=ta, tl=tl, eq=eq, mie=mie, te=eq + mie, check=ta - tl - eq - mie,
                          ocf=ocf, dep=dep, amt=amt, capex=capex, fcff=fcff,
                          nwc=ar + iv + oca - ap - ocl, ie=ie, ii=ii,
-                         rda=rda, rd_am=rd_am, onca=o["onca"], oncl=o["oncl"]))
+                         rda=rda, rd_am=rd_am, rd=rd, onca=o["onca"], oncl=o["oncl"]))
         o.update(cash=cash, ar=ar, inv=iv, oca=oca, ppe=ppe, gwi=gwi, std=std,
                  ap=ap, ocl=ocl, eq=eq, mi=mie, sh=sh, rda=rda)
     ke = D["无风险利率 Rf（10Y UST）"] + D["Beta（5年对标普500回归+Blume）"] * D["股权风险溢价 ERP"]
@@ -373,8 +373,10 @@ def recompute(inp: dict):
     # 旧式只有前两项，AAPL 会得到 −22 亿 → ROIC −4760%。
     ic_rep = last["nwc"] + last["ppe"] + last["gwi"] + last["onca"] - last["oncl"]
     ic = ic_rep + (last["rda"] if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0)
-    nopat = last["ebit"] * (1 - tt)
-    roic_calc = nopat / ic if ic else float("inf")
+    nopat = last["ebit"] * (1 - tt)                      # 申报口径：降级时的终值用它（资本化不改现金流）
+    # 调整后 NOPAT（只用于 ROIC）：研发全额抵扣、税盾保留 —— EBIT(1−t) + 研发 − 摊销（spec 2026-11-24）
+    nopat_adj = nopat + ((last["rd"] - last["rd_am"]) if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0)
+    roic_calc = nopat_adj / ic if ic else float("inf")
     roic = ((w_t + D["终值 ROIC 收敛溢价（模式2 用）"])
             if D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"] == 2 else roic_calc)
     rr = gt / roic if roic else float("inf")
@@ -395,7 +397,7 @@ def recompute(inp: dict):
               else gx * G["少数股东损益占比"])
     eqv = gx - mi_ded
     sh0 = src["摊薄股数（百万股）"] + F["增发股数（百万股）"]
-    return rows, dict(ke=ke, kd=kd, wacc=w, wacc_term=w_t, ic=ic, ic_rep=ic_rep, roic_calc=roic_calc,
+    return rows, dict(ke=ke, kd=kd, wacc=w, wacc_term=w_t, ic=ic, ic_rep=ic_rep, roic_calc=roic_calc, nopat_adj=nopat_adj,
                       roic=roic, rr=rr, nopat=nopat,
                       roic_mode=D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"],
                       degrade=1.0 if degrade else 0.0, tf=tf, tv=tv, pv=pv, pvtv=pvtv,
@@ -476,6 +478,10 @@ def verify(path: str, quiet: bool = False):
             chk(pfx, "5_DCF", f"B{_find(dm, pfx)}", ref)
         except KeyError:
             fails.append((pfx, "未找到行", None, ref))
+    try:                                                   # 11-24 起的工作簿才有此行
+        chk("调整后 NOPAT", "5_DCF", f"B{_find(dm, '调整后 NOPAT')}", dv["nopat_adj"])
+    except KeyError:
+        pass
     fr = _find(dm, "FCFF")
     for i in range(ny):
         chk("DCF-FCFF", "5_DCF", f"{CL(2+i)}{fr}", rows[i]["fcff"])
