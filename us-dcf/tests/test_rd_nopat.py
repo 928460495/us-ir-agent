@@ -78,3 +78,14 @@ def test_蒙特卡洛零波动复现确定性结果(tmp_path):
     out = MC.simulate(inp, P)
     _, dv = V.recompute(inp)
     assert abs(float(out["ps"].mean()) - dv["ps"]) < 1e-6 * max(1.0, abs(dv["ps"]))
+
+
+def test_旧工作簿按申报口径NOPAT验算():
+    """仓库里的 AAPL_DCF.xlsx 生成于 11-24 之前（研发资本化开关已开、但没有「调整后 NOPAT」行）。"""
+    from pathlib import Path
+    fix = str(Path(__file__).parent / "fixtures" / "AAPL_DCF.xlsx")
+    inp = V.read_inputs(fix)
+    assert inp["rd_nopat"] is False
+    rows, dv = V.recompute(inp)
+    assert dv["nopat_adj"] == pytest.approx(rows[-1]["ebit"] * (1 - inp["dcf"]["终值所得税率 t_term"]), rel=1e-12)
+    assert V.verify(fix, quiet=True)[0] == []

@@ -189,7 +189,8 @@ def simulate(inp: dict, P: dict) -> dict:
           + (rda if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0))
     nopat_T = ebit * (1 - tt)          # 申报口径：降级时的终值用它
     # 调整后 NOPAT 只用于 ROIC（与 verify.recompute 同式，spec 2026-11-24）
-    nopat_adj = nopat_T + ((rdx - rdam) if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0)
+    nopat_adj = nopat_T + ((rdx - rdam) if (D["研发资本化开关（1=开 0=关）"] == 1
+                                           and inp.get("rd_nopat", True)) else 0.0)
     roic_calc = np.where(ic != 0, nopat_adj / np.where(ic != 0, ic, 1.0), np.inf)
     roic = (WT + D["终值 ROIC 收敛溢价（模式2 用）"]
             if D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"] == 2 else roic_calc)

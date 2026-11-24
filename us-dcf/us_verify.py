@@ -253,6 +253,9 @@ def read_inputs(path: str) -> dict:
                judged=judged, steady=st)
     # 生效路径（展示与兼容旧调用方用）。重算一律经 expand_paths —— 改永续 g 时过渡期跟着变
     inp.update(expand_paths(inp))
+    # 旧工作簿（2026-11-24 之前）没有「调整后 NOPAT」行：其终值 ROIC 按申报口径 NOPAT 算，验算照旧口径复算
+    dm_ = _rowmap(wb["5_DCF"]) if "5_DCF" in wb.sheetnames else {}
+    inp["rd_nopat"] = any(str(k).startswith("调整后 NOPAT") for k in dm_)
     return inp
 
 
@@ -375,7 +378,8 @@ def recompute(inp: dict):
     ic = ic_rep + (last["rda"] if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0)
     nopat = last["ebit"] * (1 - tt)                      # 申报口径：降级时的终值用它（资本化不改现金流）
     # 调整后 NOPAT（只用于 ROIC）：研发全额抵扣、税盾保留 —— EBIT(1−t) + 研发 − 摊销（spec 2026-11-24）
-    nopat_adj = nopat + ((last["rd"] - last["rd_am"]) if D["研发资本化开关（1=开 0=关）"] == 1 else 0.0)
+    nopat_adj = nopat + ((last["rd"] - last["rd_am"])
+                         if (D["研发资本化开关（1=开 0=关）"] == 1 and inp.get("rd_nopat", True)) else 0.0)
     roic_calc = nopat_adj / ic if ic else float("inf")
     roic = ((w_t + D["终值 ROIC 收敛溢价（模式2 用）"])
             if D["终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）"] == 2 else roic_calc)
