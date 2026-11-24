@@ -1104,7 +1104,7 @@ def _dcf_sheet(wb, cal, path):
             # 终值 WACC = 本行 WACC −（Beta − 终值 Beta）× ERP ×（1 − Wd），与主模型同式
             wt=f"($A{r}-($B${BEr}-$B${BTr})*$B${ERPr}*(1-$B${WDr}))"
             roic=(f"IF({A}!$B${DR['终值 ROIC 处理（1=沿用末年 2=收敛至 WACC+溢价）']}=2,"
-                  f"{wt}+{A}!$B${DR['终值 ROIC 收敛溢价（模式2 用）']},($B${TEr}*(1-$B${TTr})/$B${ICr}))")
+                  f"{wt}+{A}!$B${DR['终值 ROIC 收敛溢价（模式2 用）']},($B${NAr}/$B${ICr}))")   # 调整后 NOPAT / 生效 IC，与终值节同口径
             tf=(f"$B${TEr}*(1+{col}${SHROW})*(1-$B${TTr})"
                 f"*(1-{col}${SHROW}/({roic}))")
             tvpv=f"({tf})/({wt}-{col}${SHROW})/(1+$A{r})^({NY}-0.5*$B${MYr})"

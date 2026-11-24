@@ -211,3 +211,69 @@ def test_历史营运资本有值(tmp_path):
     wb, G, cal = _calc(tmp_path, _with_rd(_fixture_cal()), name="h.xlsx")
     ws = wb["3_资产负债表"]
     assert ws.cell(31, 2).value is not None              # 第一个历史列
+
+
+# ── Task 3：独立验算与蒙特卡洛同口径 ────────────────────────────
+
+def _build(tmp_path, cal, name):
+    import ashare_build as B
+    out = str(tmp_path / name)
+    B.build(cal, out)
+    return out
+
+
+@pytest.mark.parametrize("sw,mode", [(1, 2), (0, 2), (1, 1)])
+def test_验算覆盖新增行(tmp_path, sw, mode):
+    import ashare_verify as V
+    path = _build(tmp_path, _with_rd(_fixture_cal(), rd_cap=sw, roic_mode=mode), f"v{sw}{mode}.xlsx")
+    fails, dv = V.verify(path, quiet=True)
+    assert fails == []
+    assert "nopat_adj" in dv and "ic_rep" in dv
+    rows, _ = V.recompute(V.read_inputs(path))
+    assert rows[-1]["rda"] > 0 and rows[-1]["intan"] >= 0
+
+
+def test_旧工作簿验算按开关0(tmp_path):
+    """11-24 之前的工作簿没有研发资本化的假设行与备查行：按开关 0、无形部分 0 读，验算不失配。"""
+    import ashare_verify as V
+    from openpyxl import load_workbook
+    path = _build(tmp_path, _fixture_cal(), "old.xlsx")
+    wb = load_workbook(path)
+    a = wb["1_假设"]
+    for lbl in ("研发资本化开关", "研发摊销年限", "期初研发资本", "基期非无形部分", "研发资本化率"):
+        a.cell(_row(a, lbl), 1).value = "（旧版无此行）"
+    bs = wb["3_资产负债表"]
+    for r in range(32, 38):
+        bs.cell(r, 1).value = None
+    wb.save(path)
+    inp = V.read_inputs(path)
+    assert inp["dcf"]["研发资本化开关"] == 0 and inp["dcf"]["基期非无形部分"] is None
+    fails, _ = V.verify(path, quiet=True)
+    assert fails == []
+
+
+@pytest.mark.parametrize("sw,mode", [(1, 1), (0, 1), (1, 2)])
+def test_蒙特卡洛零波动复现确定性结果_研发资本化(tmp_path, sw, mode):
+    import ashare_mc as MC
+    import ashare_verify as V
+    path = _build(tmp_path, _with_rd(_fixture_cal(), rd_cap=sw, roic_mode=mode), f"mc{sw}{mode}.xlsx")
+    inp = V.read_inputs(path)
+    P = MC.defaults({})
+    for k in list(P):
+        if str(k).startswith("sd_"):
+            P[k] = 0.0
+    P["n_paths"] = 10
+    out = MC.simulate(inp, P)
+    _, dv = V.recompute(inp)
+    assert abs(float(out["ps"].mean()) - dv["ps"]) < 1e-6 * max(1.0, abs(dv["ps"]))
+
+
+def test_模式1下蒙特卡洛随开关变化(tmp_path):
+    import ashare_mc as MC
+    import ashare_verify as V
+    ps = {}
+    for sw in (1, 0):
+        path = _build(tmp_path, _with_rd(_fixture_cal(), rd_cap=sw, roic_mode=1), f"mm{sw}.xlsx")
+        P = MC.defaults({}); P["n_paths"] = 200
+        ps[sw] = float(MC.simulate(V.read_inputs(path), P)["ps"].mean())
+    assert ps[1] != pytest.approx(ps[0], rel=1e-6)
