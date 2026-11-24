@@ -86,3 +86,128 @@ def test_calibrate_缺省年限5_资本化率由金额推出(monkeypatch):
     assert cal["dcf"]["rd_life"] == 5 and cal["rdcap"]["rate"] == pytest.approx(0.2)
     cal2 = C.calibrate("600183", 10, stmts=cal_dict["stmts"], as_of=AS_OF)
     assert cal2["rdcap"]["rate"] is None and cal2["rdcap"]["total"] is None
+
+
+# ── Task 2：工作簿（formulas 引擎真算）────────────────────────────
+
+import copy
+
+
+def _fixture_cal():
+    if not os.path.exists(FIX):
+        pytest.skip("缺离线夹具")
+    return pickle.load(open(FIX, "rb"))
+
+
+def _with_rd(cal, rd_cap=1, roic_mode=2, nonintan_mult=0.5, life=5):
+    cal = copy.deepcopy(cal)
+    onca = cal["open"]["onca"]
+    intan = onca * (1 - nonintan_mult)
+    cal["dcf"].update(rd_cap=rd_cap, rd_life=life, roic_mode=roic_mode)
+    cal["rdcap"] = dict(asset=30.0, amort=5.0, life=life, covered=6, complete=True,
+                        rd_hist=[3.0, 4.0, 5.0, 6.0, 7.0, 8.0], intan0=intan,
+                        nonintan0=onca * nonintan_mult, total=None, capitalized=None, rate=None)
+    return cal
+
+
+def _calc(tmp_path, cal, name="t.xlsx"):
+    import ashare_build as B
+    import formulas
+    from openpyxl import load_workbook
+    out = str(tmp_path / name)
+    B.build(cal, out)
+    sol = formulas.ExcelModel().loads(out).finish().calculate()
+
+    def G(sh, cell):
+        v = sol.get(f"'[{name.upper()}]{sh.upper()}'!{cell}") or sol.get(f"'[{name}]{sh}'!{cell}")
+        if v is None:
+            return None
+        try:
+            return float(v.value[0, 0])
+        except Exception:                                   # noqa: BLE001
+            return None
+    return load_workbook(out), G, cal
+
+
+def _row(ws, label, col=1):
+    for r in range(1, ws.max_row + 1):
+        v = ws.cell(r, col).value
+        if isinstance(v, str) and v.startswith(label):
+            return r
+    raise AssertionError(f"找不到「{label}」")
+
+
+def _ps(wb, G):
+    ws = wb["5_DCF"]
+    return G("5_DCF", f"B{_row(ws, '每股内在价值')}")
+
+
+def test_备查行_研发资本滚动且不破坏平衡(tmp_path):
+    wb, G, cal = _calc(tmp_path, _with_rd(_fixture_cal()))
+    CC = cal["_rows"]["CC"]
+    bs = "3_资产负债表"
+    for c in CC:
+        assert abs(G(bs, f"{c}29")) < 1e-6                                   # 平衡校验
+    a_prev = 30.0
+    for i, c in enumerate(CC):
+        am = G(bs, f"{c}32"); asset = G(bs, f"{c}33")
+        rd = G("2_利润表", f"{c}{cal['_ref']['RRD']}")
+        assert am == pytest.approx(a_prev / 5, rel=1e-9)
+        assert asset == pytest.approx(a_prev + rd - am, rel=1e-9)
+        a_prev = asset
+
+
+def test_无形部分_摊销压低时取0(tmp_path):
+    wb, G, cal = _calc(tmp_path, _with_rd(_fixture_cal(), nonintan_mult=50.0))
+    for c in cal["_rows"]["CC"]:
+        assert G("3_资产负债表", f"{c}34") == 0
+
+
+def test_两行ROIC与开关(tmp_path):
+    for sw in (1, 0):
+        wb, G, cal = _calc(tmp_path, _with_rd(_fixture_cal(), rd_cap=sw), name=f"r{sw}.xlsx")
+        ws = wb["7_财务比率与杜邦"]
+        r_rep, r_rd = _row(ws, "ROIC（报表口径）"), _row(ws, "ROIC（研发资本化）")
+        c = cal["_rows"]["CC"][-1]; col = cal["_rows"]["NH"] + len(cal["_rows"]["CC"]) + 1
+        from openpyxl.utils import get_column_letter as CL
+        ebit = G("2_利润表", f"{c}{cal['_ref']['REBIT']}")
+        rd = G("2_利润表", f"{c}{cal['_ref']['RRD']}")
+        bs = "3_资产负债表"
+        ic_rep = G(bs, f"{c}31") + G(bs, f"{c}12") + G(bs, f"{c}34")
+        v_rep, v_rd = G("7_财务比率与杜邦", f"{CL(col)}{r_rep}"), G("7_财务比率与杜邦", f"{CL(col)}{r_rd}")
+        nopat_rep = v_rep * ic_rep
+        if sw == 1:
+            assert v_rd == pytest.approx((nopat_rep + rd - G(bs, f"{c}32")) / (ic_rep + G(bs, f"{c}33")), rel=1e-6)
+        else:
+            assert v_rd == pytest.approx(v_rep, rel=1e-9)
+        assert G(bs, f"{c}35") == pytest.approx(ic_rep, rel=1e-9)
+
+
+def test_默认模式每股价值不随开关变(tmp_path):
+    base = _fixture_cal()
+    wb1, G1, _ = _calc(tmp_path, _with_rd(base, rd_cap=1), name="a1.xlsx")
+    wb0, G0, _ = _calc(tmp_path, _with_rd(base, rd_cap=0), name="a0.xlsx")
+    assert _ps(wb1, G1) == pytest.approx(_ps(wb0, G0), rel=1e-9)
+
+
+def test_模式1终值用生效IC(tmp_path):
+    base = _fixture_cal()
+    wb1, G1, _ = _calc(tmp_path, _with_rd(base, rd_cap=1, roic_mode=1), name="m1.xlsx")
+    wb0, G0, _ = _calc(tmp_path, _with_rd(base, rd_cap=0, roic_mode=1), name="m0.xlsx")
+    assert _ps(wb1, G1) != pytest.approx(_ps(wb0, G0), rel=1e-6)
+    ws = wb1["5_DCF"]
+    assert G1("5_DCF", f"B{_row(ws, '调整后 NOPAT')}") is not None
+
+
+def test_旧夹具无rdcap照常建模且IC不变(tmp_path):
+    wb, G, cal = _calc(tmp_path, _fixture_cal(), name="old.xlsx")
+    for c in cal["_rows"]["CC"]:
+        assert G("3_资产负债表", f"{c}34") == 0
+    a = wb["1_假设"]
+    assert a.cell(_row(a, "研发资本化开关"), 2).value == 0
+
+
+def test_历史营运资本有值(tmp_path):
+    wb, G, cal = _calc(tmp_path, _with_rd(_fixture_cal()), name="h.xlsx")
+    ws = wb["3_资产负债表"]
+    assert ws.cell(31, 2).value is not None              # 第一个历史列
