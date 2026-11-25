@@ -150,3 +150,145 @@ def normalize(text: str) -> str:
     for kind, lines in blocks(text):
         parts.append("\n".join(_list_lines(lines) if kind == "list" else lines))
     return "\n\n".join(parts) + "\n" if parts else ""
+
+
+# ── HTML ──────────────────────────────────────────────────────
+
+_URL_RX = re.compile(r"https?://[^\s<>\"'「」（）()《》，。；、）】]+")
+_LINK = re.compile(r"\[([^\]\[]+)\]\((https?://[^\s)]+)\)")
+_INLINE_CODE = re.compile(r"`([^`]+)`")
+_BOLD = re.compile(r"\*\*(?=\S)([^*]+?)(?<=\S)\*\*")
+_FOOT = re.compile(r"\[\^(\w+)\]")
+# 脚注紧跟的显示值：数字（含单位）；没有数字就只显示角标
+_VALUE = re.compile(r"(-?\d[\d,]*(?:\.\d+)?(?:\s?(?:亿|万)?(?:美元|元|股|家|分位|年|x|%)|%|x)?)$")
+
+
+def _e(x) -> str:
+    return _html.escape(str(x), quote=True)
+
+
+class _Ids:
+    def __init__(self, uid: str) -> None:
+        self.uid, self.n = uid, 0
+
+    def next(self) -> str:
+        self.n += 1
+        return f"{self.uid}-{self.n}"
+
+
+def source_button(value: str, tip: str, sid: str) -> str:
+    """数字来源 toggletip：点击、回车、悬停、聚焦都能打开，键盘与读屏可用。参数已转义。"""
+    return (f'<button type="button" class="num" interestfor="{sid}" popovertarget="{sid}" '
+            f'popovertargetaction="show" aria-expanded="false">{value}</button>'
+            f'<span id="{sid}" popover="hint" role="tooltip" class="tip">{tip}</span>')
+
+
+def inline(text: str, notes: dict[str, str], ids: _Ids) -> str:
+    """一行文字 → HTML。先把认得的片段换成私用区占位符，其余整体转义，最后展开。"""
+    keep: list[str] = []
+
+    def stash(h: str) -> str:
+        keep.append(h)
+        return chr(0xE000 + len(keep) - 1)
+
+    def foot(s: str) -> str:
+        out, at = [], 0
+        for m in _FOOT.finditer(s):
+            tip = notes.get(m.group(1))
+            if tip is None:
+                continue
+            before = s[at:m.start()]
+            v = _VALUE.search(before)
+            shown = v.group(1) if v else f"[{m.group(1)}]"
+            out.append(before[:v.start()] if v else before)
+            out.append(stash(source_button(_e(shown), _e(tip), f"src-{ids.next()}")))
+            at = m.end()
+        return "".join(out) + s[at:]
+
+    s = "".join(c for c in text if not 0xE000 <= ord(c) <= 0xF8FF)
+    s = _INLINE_CODE.sub(lambda m: stash(f"<code>{_e(m.group(1))}</code>"), s)
+    s = _LINK.sub(lambda m: stash(f'<a href="{_e(m.group(2))}" rel="noopener noreferrer">{_e(m.group(1))}</a>'), s)
+    s = _URL_RX.sub(lambda m: stash(f'<a href="{_e(m.group(0))}" rel="noopener noreferrer">{_e(m.group(0))}</a>'), s)
+    s = foot(s)
+    s = _BOLD.sub(lambda m: stash("<strong>") + m.group(1) + stash("</strong>"), s)
+    out = _e(s)
+    for _ in range(3):                                  # 占位符可能嵌套（粗体里有链接）
+        out = re.sub(r"[\ue000-\uf8ff]", lambda m: keep[ord(m.group(0)) - 0xE000]
+                     if ord(m.group(0)) - 0xE000 < len(keep) else "", out)
+    # 紧随的中文标点与数字绑在一行，否则「，」会被挤到下一行行首
+    return re.sub(r"(<button type=\"button\" class=\"num\".*?</span>)([，。、；：！？）」』》])",
+                  r'<span class="nw">\1\2</span>', out)
+
+
+def _ul(items: list[tuple[int, str, str]], notes, ids, fold_over: int) -> str:
+    """[(级, 标记, 文字)] → 嵌套列表。"""
+    out: list[str] = []
+    stack: list[str] = []
+    for lv, mark, body in items:
+        tag = "ol" if mark[:-1].isdigit() else "ul"
+        lv = min(lv, len(stack))                       # 缩进跳级按一级算
+        while len(stack) > lv + 1:
+            out.append(f"</li></{stack.pop()}>")
+        if len(stack) == lv + 1:
+            out.append("</li>")
+        else:
+            out.append(f"<{tag}>")
+            stack.append(tag)
+        out.append(f"<li>{inline(body, notes, ids)}")
+    while stack:
+        out.append(f"</li></{stack.pop()}>")
+    h = "".join(out)
+    top = sum(1 for lv, _m, _b in items if lv == 0)
+    return f"<details><summary>共 {top} 条，点开看</summary>{h}</details>" if fold_over and top > fold_over else h
+
+
+def _cells(row: str) -> list[str]:
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _table(rows: list[str], notes, ids) -> str:
+    if len(rows) < 2 or not re.fullmatch(r"\|?(?:\s*:?-{2,}:?\s*\|?)+", rows[1].strip()):
+        return "".join(f"<p>{inline(r, notes, ids)}</p>" for r in rows)
+    head = "".join(f'<th scope="col">{inline(c, notes, ids)}</th>' for c in _cells(rows[0]))
+    body = "".join("<tr>" + "".join(f"<td>{inline(c, notes, ids)}</td>" for c in _cells(r)) + "</tr>" for r in rows[2:])
+    return (f'<div class="tbl" tabindex="0" role="region"><table><thead><tr>{head}</tr></thead>'
+            f"<tbody>{body}</tbody></table></div>")
+
+
+def to_html(text: str, notes: dict[str, str] | None = None, *, base: int = 2, uid: str = "v",
+            fold_over: int = 0) -> str:
+    """规整 Markdown → HTML。`notes` 是脚注号 → 来源说明；`base` 为正文最高标题级别；`uid` 区分同页多次渲染。
+    `fold_over` > 0 时，超过这么多条的列表折叠。全部文字先转义，链接只放行 http/https。"""
+    notes, ids = notes or {}, _Ids(uid)
+    bl = blocks(text)
+    heads = [len(HEADING_RX.match(b[1][0]).group(1)) for b in bl if b[0] == "head"]
+    shift = base - min(heads) if heads else 0
+    out: list[str] = []
+    for kind, lines in bl:
+        if kind == "head":
+            m = HEADING_RX.match(lines[0])
+            lv = max(1, min(6, len(m.group(1)) + shift))
+            out.append(f'<h{lv} id="h-{ids.next()}">{inline(m.group(2), notes, ids)}</h{lv}>')
+        elif kind == "list":
+            items = []
+            for ln in _list_lines(lines):
+                m = re.match(r"^(\s*)(-|\d{1,2}\.)\s(.*)$", ln, re.S)
+                items.append((len(m.group(1)) // 2, m.group(2), m.group(3)))
+            out.append(_ul(items, notes, ids, fold_over))
+        elif kind == "quote":
+            inner = "".join(f"<p>{inline(x.lstrip('> ').strip(), notes, ids)}</p>" for x in lines if x.lstrip("> ").strip())
+            out.append(f"<blockquote>{inner}</blockquote>")
+        elif kind == "table":
+            out.append(_table(lines, notes, ids))
+        elif kind == "code":
+            body = [x for x in lines if not _FENCE.match(x)]
+            out.append(f"<pre><code>{_e(chr(10).join(body))}</code></pre>")
+        else:
+            out.append(f"<p>{inline(lines[0], notes, ids)}</p>")
+    return "\n".join(out)
+
+
+def fold(items: list[str], label: str, limit: int = 10) -> str:
+    """名单：不超过 `limit` 条直接列；超过就折叠成「label 共 N 条」。"""
+    h = "<ul>" + "".join(f"<li>{_e(x)}</li>" for x in items) + "</ul>"
+    return h if len(items) <= limit else f"<details><summary>{_e(label)}：共 {len(items)} 条，点开看</summary>{h}</details>"
