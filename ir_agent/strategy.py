@@ -23,6 +23,7 @@ Bear/Base/Bull 三情景才有定性依据，而不是把基准参数上下调�
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
@@ -193,8 +194,10 @@ class StrategyFailed(Exception):
 
 EVENT_MONTHS, EVENT_MAX, EVENT_CHARS = 6, 8, 2500
 EVENT_DECISIONS = ("不采用", "采用")          # 长的在前：「不采用」含「采用」二字
-_EVENT_ITEM = re.compile(r"Item\s+\d\.\d\d")
-_EVENT_SERIES = re.compile(r"[\d\s（）()年月日份季度第一二三四半]+")
+_EVENT_ITEM = re.compile(r"\bitem\s*\d\.\d\d", re.I)          # 有的公司写 ITEM（AMZN、T）
+_TOC_ENTRY = re.compile(r"\s*.{0,60}|.{0,350}\b\d{1,2}\s*", re.S)   # 目录行：很短，或以页码收尾
+_PERIODIC_TITLE = re.compile(r"(?:\d{4}年|\d+月|季度|半年).*(?:简报|经营数据|销售|产销|业绩预|业绩快报)")
+_EVENT_SERIES = re.compile(r"\d+|[年月份\s]|前?第?[一二三四]季度|半年度?|年度")
 
 
 def material_events(corpus, limit: int | None = EVENT_MAX) -> list:
@@ -215,12 +218,27 @@ def material_events(corpus, limit: int | None = EVENT_MAX) -> list:
             if d.title.startswith("8-K 业绩"):
                 continue
         else:
-            key = _EVENT_SERIES.sub("", d.title)
-            if d.rank != 1 or key in series:
+            if d.rank != 1:
                 continue
-            series.add(key)
+            if _PERIODIC_TITLE.search(d.title):      # 只有定期简报去重；「关于对外投资的公告」同名也是两件事
+                key = _EVENT_SERIES.sub("", d.title)
+                if key in series:
+                    continue
+                series.add(key)
         out.append(d)
     return out if limit is None else out[:limit]
+
+
+def _event_body(text: str) -> str:
+    """8-K 从第一个条目的正文起（略过封面与目录）；没有条目标题的（A 股公告）原样。"""
+    hits = list(_EVENT_ITEM.finditer(text))
+    if not hits:
+        return text.strip()
+    first = hits[0]
+    if len(hits) > 1 and _TOC_ENTRY.fullmatch(text[first.end():hits[1].start()]):      # 先出现的是目录
+        code = first.group(0)[-4:]
+        first = next((h for h in hits[1:] if h.group(0)[-4:] == code), first)
+    return text[first.start():].strip()
 
 
 def events_block(corpus) -> str:
@@ -237,15 +255,14 @@ def events_block(corpus) -> str:
         lines.append(f"（另有更早的 {more} 条未列，不要求回应）")
     lines.append("\n公告正文：")
     for d in docs:
-        m = _EVENT_ITEM.search(d.text)
-        body = d.text[m.start() if m else 0:].strip()
+        body = _event_body(d.text)
         lines.append(f"  ——《{d.title}》\n  " + body[:EVENT_CHARS].replace("\n", "\n  ")
                      + ("……" if len(body) > EVENT_CHARS else ""))
     return "\n".join(lines)
 
 
 def _plain_title(title: str) -> str:
-    """摘要里的公告名：去掉表格代号；仍带账本外数字（如项目产能）的只留日期 —— 摘要会进撰写提示词。"""
+    """摘要里的公告名：去掉表格代号；仍带账本外数字（如项目产能）的去掉数字 —— 摘要会进撰写提示词。"""
     from ir_agent.citation import audit_bare_numbers
 
     t = title.removeprefix("8-K ")
@@ -255,7 +272,7 @@ def _plain_title(title: str) -> str:
 
 
 def _event_key(s: str) -> str:
-    return re.sub(r"[\s「」《》\"“”]", "", s)
+    return re.sub(r"[\s「」《》\"“”()]", "", unicodedata.normalize("NFKC", s))
 
 
 # ── 量化锚点 ──────────────────────────────────────────────────
@@ -476,8 +493,10 @@ def parse(text: str, corpus=None) -> StrategyView:
     view.expected_events = [d.title for d in material_events(corpus)]
     by_key = {_event_key(t): t for t in view.expected_events}
     for m in _EVENT.finditer(text):
-        p = _cells(m.group(1))
-        title = by_key.get(_event_key(p[0]))
+        line = m.group(1).strip()
+        whole = next((t for t in view.expected_events if line.startswith(t)), None)
+        p = [whole, *_cells(line[len(whole):])[1:]] if whole else _cells(line)     # 标题里可能带 |
+        title = whole or by_key.get(_event_key(p[0]))
         if title is None:
             note(f"公告「{p[0]}」不在须回应的清单里，没读进来")
             continue

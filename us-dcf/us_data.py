@@ -184,6 +184,19 @@ def pick_series(g: dict, tags: list[str], ends: list[str], duration: bool, scale
 
     所以：先选覆盖最全的那个标签（并列时按优先序），只有它仍有缺口时才从
     次优标签补，并把每一次跨标签补缺都记进诊断，让使用者看得见。"""
+    if tags and tags[0] == current_investments.TAG:
+        # 勾稽值逐期优先，不参与「主标签」的覆盖度比较 —— 最新一期勾稽不上不该让历史各期退回附注口径
+        tied = series(g, tags[:1], duration, scale, splits) if tags[0] in g else {}
+        rest = [e for e in ends if e not in tied]
+        if not rest:
+            return [tied[e] for e in ends]
+        sub = pick_series(g, tags[1:], rest, duration, scale, splits, diag if not tied else
+                          {"缺失": []}, name) or [None] * len(rest)
+        got = {**dict(zip(rest, sub)), **tied}
+        if tied and any(got[e] is None for e in ends):
+            diag.setdefault("期间不全", []).append(
+                f"{name} 仅 {sum(got[e] is not None for e in ends)}/{len(ends)} 期有值")
+        return None if all(got[e] is None for e in ends) else [got[e] for e in ends]
     cands = {t: series(g, [t], duration, scale, splits) for t in tags if t in g}
     cands = {t: v for t, v in cands.items() if v}
     if not cands:

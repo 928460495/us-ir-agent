@@ -67,3 +67,31 @@ def test_us_data短期投资优先取勾稽值():
     diag = {"缺失": []}
     got = D.pick_series(CI.add_tied(_nvda()), D.TAGS_BS["短期投资"], [E], False, D.MN, None, diag, "短期投资")
     assert got == [pytest.approx(51951.0)]
+
+
+# ── 终审 I2 / M1 / M3 ─────────────────────────────────────────
+
+def test_I2_后来才勾稽上_但分项早已披露_取分项披露日():
+    g = _nvda()
+    g["MarketableSecuritiesCurrent"] = {"units": {"USD": [_n(E, 51951, *K)]}}
+    g["PrepaidExpenseAndOtherAssetsCurrent"] = {"units": {"USD": [_n(E, 3180, *Q)]}}     # 次年 10-Q 才有
+    assert _tied(g) == [(51951.0, "2026-02-25", "10-K")]
+
+
+def test_M1_残差近零时附注股票不算勾稽():
+    g = _nvda()
+    for t, v in (("AssetsCurrent", 73655.2), ("EquitySecuritiesFvNi", 1.2)):
+        g[t] = {"units": {"USD": [_n(E, v, *K)]}}
+    del g["DebtSecuritiesCurrent"]
+    assert _tied(g) == []
+
+
+def test_M3_最新一期勾稽不上时_其余期仍取勾稽值():
+    L = "2027-01-31"
+    g = _nvda()
+    g["AssetsCurrent"]["units"]["USD"].append(_n(L, 200000, "2027-02-25", "10-K"))
+    g["ShortTermInvestments"] = {"units": {"USD": [_n(L, 70000, "2027-02-25", "10-K"), _n(E, 1, *K)]}}
+    diag = {"缺失": []}
+    got = D.pick_series(CI.add_tied(g), D.TAGS_BS["短期投资"], [E, L], False, D.MN, None, diag, "短期投资")
+    assert got == [pytest.approx(51951.0), pytest.approx(70000.0)]
+    assert CI.TAG not in str(diag)

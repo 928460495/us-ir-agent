@@ -13,6 +13,7 @@ from __future__ import annotations
 
 TAG = "_CurrentInvestmentsTied"
 TOL = 0.0005                       # 对得上的容差：占流动资产合计
+MIN_WITH_EQUITY = 0.01             # 用到「有价股票」时，残差至少占流动资产合计的比例
 FORMS = ("10-K", "10-Q", "10-K/A", "10-Q/A")
 
 _AC = "AssetsCurrent"
@@ -35,7 +36,8 @@ def _combos() -> list[tuple[str, ...]]:
     return ([(t,) for t in _FACE] + [(t, e) for t in _FACE for e in _EQUITY] + [(e,) for e in _EQUITY])
 
 
-def _tied(v: dict[str, float]) -> float | None:
+def _tied(v: dict[str, float]) -> tuple[float, tuple[str, ...]] | None:
+    """对得上的（合计，所用科目）；对不上给 None。"""
     ac, cash = v.get(_AC), v.get(_CASH)
     if not ac or cash is None:
         return None
@@ -52,18 +54,22 @@ def _tied(v: dict[str, float]) -> float | None:
     for other in others:
         left = base - other
         for combo in _combos():
-            if all(t in v for t in combo):
-                s = sum(v[t] for t in combo)
-                if s > 0 and abs(s - left) <= TOL * ac:
-                    return s
+            if not all(t in v for t in combo):
+                continue
+            if combo[-1] in _EQUITY and left < MIN_WITH_EQUITY * ac:
+                continue                          # 残差近零时，附注里的零星股票会碰巧落进容差（MRVL、SMCI）
+            s = sum(v[t] for t in combo)
+            if s > 0 and abs(s - left) <= TOL * ac:
+                return s, combo
     return None
 
 
 def add_tied(gaap: dict) -> dict:
     """返回带 `TAG` 合成科目的 us-gaap 字典；一期都勾稽不上就原样返回（同一对象）。
 
-    按申报日还原版本：每个期末逐个申报日看当时已披露的值，首次对得上（或对上的值变了）记一条，
-    申报日取那一天 —— 账本的时点守卫照常生效。财年末的期标成 10-K（补全的分项可能来自次年 10-Q 的比较栏）。
+    按申报日还原版本：每个期末逐个申报日看当时已披露的值，对上的值首次出现（或变了）记一条。申报日取
+    **所用科目的值全部披露的那天**，不是勾稽成立的那天 —— 「其他流动资产」有时次年才单列，值本身早已公开；
+    值没公开就不会提前，账本的时点守卫照常生效。财年末的期标成 10-K（补全的分项可能来自次年 10-Q 的比较栏）。
     """
     seen: dict[str, list[tuple[str, str, float, str]]] = {}          # 期末 → [(申报日, 标签, 值, 表格)]
     for t in COMPONENTS & set(gaap):
@@ -77,11 +83,14 @@ def add_tied(gaap: dict) -> dict:
         form = "10-K" if any(f.startswith("10-K") for f in forms) else "10-Q"
         rows.sort(key=lambda r: r[0])
         now: dict[str, float] = {}
+        since: dict[str, str] = {}                # 标签 → 当前值从哪天起
         last = None
         for filed in sorted({r[0] for r in rows}):
-            now.update({t: v for d, t, v, _ in rows if d == filed})
-            s = _tied(now)
-            if s is not None and s != last:
-                last = s
-                out.append({"end": end, "val": s, "filed": filed, "form": form})
+            for d, t, v, _ in rows:
+                if d == filed and now.get(t) != v:
+                    now[t], since[t] = v, filed
+            hit = _tied(now)
+            if hit is not None and hit[0] != last:
+                last = hit[0]
+                out.append({"end": end, "val": hit[0], "filed": max(since[t] for t in hit[1]), "form": form})
     return {**gaap, TAG: {"units": {"USD": out}}} if out else gaap

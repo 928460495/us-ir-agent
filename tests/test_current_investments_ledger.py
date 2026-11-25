@@ -33,3 +33,14 @@ def test_账本取勾稽值():
 def test_裁剪后勾稽所需科目仍在():
     assert {"DebtSecuritiesCurrent", "EquitySecuritiesFvNi", "PrepaidExpenseAndOtherAssetsCurrent"} <= MAPPED_TAGS
     assert _sti(slim(_doc())) == _sti(_doc())
+
+
+def test_M2_不产生合成科目的补缺说明():
+    notes = []
+    d = _doc()
+    d["facts"]["us-gaap"]["ShortTermInvestments"] = {"units": {"USD": [
+        {"end": "2025-01-26", "val": 5, "filed": "2025-02-26", "form": "10-K", "fy": 2025, "fp": "FY"}]}}
+    facts = parse_companyfacts(d, "0125", "s", notes=notes)
+    assert not any("_CurrentInvestments" in n for n in notes)
+    assert {f.period: f.value for f in facts if f.key == "trading_finasset"} == {
+        "2026FY": Decimal(51951) * 10**6, "2025FY": Decimal(5)}

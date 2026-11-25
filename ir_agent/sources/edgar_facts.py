@@ -151,6 +151,9 @@ def _rows(gaap: dict, tag: str, unit: str, duration: bool, fye: str) -> list[_Ro
 def _pick(gaap: dict, key: str, tags: tuple[str, ...], unit: str, duration: bool, fye: str,
           notes: list[str], skip: set[str] = frozenset()) -> list[_Row]:
     """按覆盖度选主标签；主标签缺的期间按优先序从其他标签补，并记说明。"""
+    if tags and tags[0] == CI.TAG:          # 主表勾稽值逐期优先，其余期照原优先序
+        tied = [r for r in _rows(gaap, CI.TAG, unit, duration, fye) if r[0] not in skip]
+        return tied + _pick(gaap, key, tags[1:], unit, duration, fye, notes, skip=set(skip) | {r[0] for r in tied})
     cands = {t: [r for r in _rows(gaap, t, unit, duration, fye) if r[0] not in skip] for t in tags}
     cands = {t: rs for t, rs in cands.items() if rs}
     if not cands:

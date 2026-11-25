@@ -259,3 +259,87 @@ def test_无出处的跟踪指标重跑时再检索(monkeypatch):
                                  MT.TrackItem("乙", "d", "f", "有结论", ["https://x"])])
     MT.track(object(), view, industry="x", as_of=AS_OF, corpus=None, us=True, done=done)
     assert calls == ["甲"]
+
+
+# ── 终审（2026-11-25）──────────────────────────────────────────
+
+def test_I1_大写ITEM与目录不误切():
+    from ir_agent import strategy
+    amzn = _corpus(_doc("8-K 其他事项（2026-10-01）", date(2026, 10, 1),
+                        COVER + "TABLE OF CONTENTS ITEM 8.01. OTHER EVENTS. 3 ITEM 9.01. EXHIBITS 3 SIGNATURES 4 "
+                        + "ITEM 8.01. OTHER EVENTS. " + "The company agreed to settle. " * 10 + "ITEM 9.01. EXHIBITS. none"))
+    txt = strategy.events_block(amzn)
+    assert "agreed to settle" in txt and "cover page boilerplate" not in txt and "TABLE OF CONTENTS" not in txt
+    long_toc = _corpus(_doc("8-K 高管或董事变动（2026-09-09）", date(2026, 9, 9),
+                            COVER + "TABLE OF CONTENTS ITEM 5.02. DEPARTURE OF DIRECTORS OR CERTAIN OFFICERS; ELECTION OF "
+                            "DIRECTORS; APPOINTMENT OF CERTAIN OFFICERS 3 ITEM 9.01. EXHIBITS. 4 SIGNATURES 5 EXHIBIT 1.1 "
+                            + "EXHIBIT 4.1 EXHIBIT 4.2 EXHIBIT 4.3 EXHIBIT 4.4 " * 3
+                            + "ITEM 5.02. DEPARTURE. The director resigned, see Item 9.01 below. ITEM 9.01. EXHIBITS. x"))
+    txt = strategy.events_block(long_toc)
+    assert "director resigned" in txt and "EXHIBIT 4.1" not in txt
+    ref = _corpus(_doc("8-K 重大协议（2026-06-10）", date(2026, 6, 10),
+                       COVER + "Item 1.01 Entry into an Agreement. " + "The company signed a lease. " * 8
+                       + "Item 2.03 Obligation. The information in Item 1.01 above is incorporated."))
+    assert "signed a lease" in strategy.events_block(ref)
+    t = _corpus(_doc("8-K 高管或董事变动（2026-10-16）", date(2026, 10, 16),
+                     COVER + "ITEM 5.02 Departure. " + "The CFO will retire in March. " * 8 + "Item 9.01 Exhibits. x"))
+    assert "CFO will retire" in strategy.events_block(t)
+
+
+@pytest.mark.parametrize("a,b", [("关于对外投资的公告", "关于对外投资的公告"),
+                                 ("关于签订重大合同的公告（一）", "关于签订重大合同的公告（二）")])
+def test_I3_通用标题的不同公告不被去重(a, b):
+    from ir_agent import strategy
+    c = _corpus(_doc(a, date(2026, 10, 1), "x", rank=1, url="https://x/1"), _doc(b, date(2026, 8, 1), "y", rank=1, url="https://x/2"))
+    assert len(strategy.material_events(c)) == 2
+
+
+@pytest.mark.parametrize("head", [
+    "第1条 中国巨石关于巨石集团有限公司与巨石集团香港有限公司共同增资的公告",     # 补全了截断的标题
+    "第1条 《中国巨石关于巨石集团有限公司与巨石集团香港有限公司》",
+    "第1条",
+    "第1条 中国巨石关于（半角）(2026-11-12) 的公告：补充",
+])
+def test_I5_公告条目按序号认(head):
+    from ir_agent import methodology_review as R
+    exp = [("公告", "第1条 中国巨石关于巨石集团有限公司与巨石集团香港有限公"), ("公告", "第2条 另一条公告"), ("自洽", "x")]
+    vs = R.parse(f"[公告] {head}：提醒　理由　建议：补\n[公告] 第2条 另一条公告：通过\n[自洽] x：通过", exp,
+                 kinds=("公告", "自洽"))
+    assert [v.level for v in vs] == ["提醒", "通过", "通过"]
+
+
+def test_I5_撰写者标题全半角与竖线():
+    from ir_agent import strategy
+    piped = "8-K 其他事项 A|B（2026-10-01）"
+    c = _corpus(_doc(CEO, date(2026, 11, 12), "Item 5.02 x"), _doc(piped, date(2026, 10, 1), "Item 8.01 y"))
+    v = strategy.parse(f"公告: 8-K 高管或董事变动 (2026-11-12) | 采用 | 影响一\n公告: {piped} | 不采用 | 理由二", c)
+    assert [(e.title, e.decision, e.note) for e in v.events] == [(CEO, "采用", "影响一"), (piped, "不采用", "理由二")]
+
+
+def test_M6_正文里的reCAPTCHA页脚不误伤(monkeypatch):
+    assert _open(monkeypatch, EN + " This site is protected by reCAPTCHA and the Google Privacy Policy.").articles[0].opened
+
+
+def test_M7_省略号片段太短或相距太远不算():
+    far = "revenue grew. " + "filler words here. " * 200 + "decline in guidance"
+    assert "找不到" in _note("「revenue grew … decline in guidance」", hay=far)
+    assert "找不到" in _note("「公司…毛利率…下降」", hay="公司本年毛利率有所下降")
+
+
+def test_M9_重搜失败时保留上轮结论(monkeypatch):
+    from ir_agent import macro_track as MT
+
+    def boom(*a, **k):
+        raise RuntimeError("超时")
+    monkeypatch.setattr(C, "search", boom)
+    view = SimpleNamespace(tracks=[SimpleNamespace(indicator="甲", driver="d", falsifier="f")])
+    res = MT.track(object(), view, industry="x", as_of=AS_OF, corpus=None, us=True,
+                   done=MT.TrackResult(items=[MT.TrackItem("甲", "d", "f", "上轮结论", [])]))
+    assert res.items[0].conclusion == "上轮结论" and res.failed
+
+
+def test_M8_三月底申报年报后的一季度业绩也提示():
+    from ir_agent.sources.edgar_filings import pending_report
+    n = pending_report(_sub([("8-K", "2026-04-24", "2.02", "2026-04-24"),
+                             ("10-K", "2026-03-28", "", "2025-12-31")]), AS_OF)
+    assert "2026-04-24" in n and "初步" in n

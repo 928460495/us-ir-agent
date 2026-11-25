@@ -79,3 +79,11 @@ def test_附件取失败只记说明不影响主新闻稿(fake):
     res = _gather([EARN])
     assert [d.doc_id for d in res.docs] == [f"sec8k_{ACC}"]
     assert any("EX-99.2" in x and ACC in x for x in res.fetch_failed_reasons)
+
+
+def test_业绩8K捆绑的其他实质事项另存主文档(fake):
+    """终审 I4：换 CEO、重组常与业绩同一份 8-K 发布（HPQ 2026-02-03：2.02 + 5.02），只取 EX-99 就漏了。"""
+    res = _gather([EARN[:5] + ("2.02,5.02,9.01",)])
+    d = {x.title: x for x in res.docs}
+    assert "8-K 高管或董事变动（2026-07-30）" in d and "CFO will retire" in d["8-K 高管或董事变动（2026-07-30）"].text
+    assert len({x.doc_id for x in res.docs}) == len(res.docs) == 3

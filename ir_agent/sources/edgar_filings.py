@@ -67,7 +67,7 @@ def _other_exhibits(index_html: str, main_url: str) -> list[tuple[str, str]]:
     return out
 
 
-PENDING_DAYS = 30              # 定期报告申报后这么多天以内的业绩 8-K 算同一期的补充披露
+PENDING_DAYS = 85              # 最新定期报告的期末之后满一季，才可能有下一季的业绩
 
 
 def pending_report(sub: dict, as_of: date) -> str:
@@ -82,9 +82,11 @@ def pending_report(sub: dict, as_of: date) -> str:
     periodic = max((x for x in rows if x[0] in ("10-Q", "10-K")), key=lambda x: x[1], default=None)
     early = max((x[1] for x in rows if x[0] in ("8-K", "8-K/A")
                  and EARNINGS in [i.strip() for i in x[2].split(",")]), default=None)
-    if periodic is None or early is None or (early - periodic[1]).days <= PENDING_DAYS:
+    if periodic is None or early is None or early <= periodic[1] \
+            or not periodic[3] or (early - date.fromisoformat(periodic[3])).days < PENDING_DAYS:
         return ""
-    return (f"最新一季业绩已于 {early.isoformat()} 以业绩新闻稿发布，对应的定期报告（季报或年报）尚未申报："
+    return (f"{early.isoformat()} 已有业绩类新闻稿（新一季业绩，也可能只是初步数据或产销量），"
+            "对应的定期报告（季报或年报）尚未申报："
             f"账本、TTM 与由此算出的倍数仍截至 {periodic[3]}（{periodic[1].isoformat()} 申报），"
             "引用时须写明截止期，并与业绩新闻稿里的最新读数对照")
 
@@ -134,10 +136,35 @@ def gather_us(*, sub: dict, as_of: date, corpus, store, company: str,
         if corpus.add_if_visible(doc):
             res.docs.append(doc)
             res.picked += 1
+        # 业绩 8-K 里捆绑的其他实质事项（换 CEO、重组、重大协议）在主文档里，EX-99 往往不写
+        also = next((x for x in ITEM_NAMES if x in items and x != EARNINGS), None) if picked == EARNINGS else None
+        if also:
+            _add_main(res, f"{base}/{r['primaryDocument'][i]}", also, acc=acc, filed=filed, as_of=as_of,
+                      corpus=corpus, store=store, company=company)
         if idx is not None:
             _add_exhibits(res, idx, url, acc=acc, filed=filed, as_of=as_of, corpus=corpus,
                           store=store, company=company)
     return res
+
+
+def _add_main(res: AnnounceResult, url: str, item: str, *, acc: str, filed: date, as_of: date, corpus,
+              store, company: str) -> None:
+    """业绩 8-K 的主文档另存一篇，按捆绑的那个事项命名。取失败只记说明。"""
+    try:
+        html, _ = edgar.get_text(url, {}, "sec_8k_doc", store)
+    except edgar.SecIdentityMissing:
+        raise
+    except Exception as e:                               # noqa: BLE001
+        res.fetch_failed += 1
+        res.fetch_failed_reasons.append(f"8-K {acc}（{filed}）主文档：{e.__class__.__name__}")
+        return
+    doc = Document(doc_id=f"sec8k_{acc}_main", url=url, publisher=company, tier=Tier.COMPANY,
+                   title=f"8-K {ITEM_NAMES[item]}（{filed.isoformat()}）",
+                   published=filed, retrieved=as_of, text=html_text(html),
+                   prompt_limit=PROMPT_LIMIT, rank=1 if item in TIER_ONE else 2)
+    if corpus.add_if_visible(doc):
+        res.docs.append(doc)
+        res.picked += 1
 
 
 def _add_exhibits(res: AnnounceResult, idx: str, main_url: str, *, acc: str, filed: date,
