@@ -2984,7 +2984,7 @@ def run_views(code: str, r, as_of: date, out_dir: str | Path, *, snapshot_dir: s
     out = Path(out_dir)
     notes = notes if notes is not None else []
     md, _pr = _restore_state(out)
-    _analyse_facts(code, r, as_of, snapshot_dir)
+    notes += _analyse_facts(code, r, as_of, snapshot_dir)[2]
     notes += _restore_corpus(r, out, md, sections=False)
     arts: dict[str, str] = {}
     kw = _readable_views(r, out, md, arts, notes)

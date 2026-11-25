@@ -83,3 +83,11 @@ def test_同一显示值对应两个指标时两个来源都列出():
     assert text.count("[^") == 1 and "1200.00 元[^" not in text
     only = next(v for k, v in notes.items() if f"[^{k}]" in text)
     assert "net_profit@2025FY" in only and "net_profit_attr_parent@2025FY" in only
+
+
+def test_取数失败要说出来(env, monkeypatch):
+    r, out, _ = env
+    monkeypatch.setattr(full, "_analyse_facts", lambda *a, **k: ({}, {}, ["宏观（某序列取数失败）"]))
+    notes: list[str] = []
+    full.run_views("600519", r, AS_OF, out, notes=notes)
+    assert "宏观（某序列取数失败）" in notes

@@ -130,3 +130,14 @@ def test_valuation_dashboard_also_uses_readable_views():
     from ir_agent import full
     src = inspect.getsource(full.run_valuation)
     assert "_readable_views(" in src and "context=md" not in src
+
+
+@pytest.mark.parametrize("text", ["行业 CR5 [[industry.cr5@2025FY]] 为 81.72%", "行业 CR5（[[industry.cr5@2025FY]]，81.72%）"])
+def test_前面已写中文名时不重复(text):
+    body, _ = readable.render_readable(text, _ledger(), AS_OF)
+    assert body.count("行业 CR5") == 1 and body.count("81.72") == 1 and "[^1]" in body
+
+
+def test_前面已写中文名且后面没有同值时显示数值():
+    body, _ = readable.render_readable("行业 CR5 [[industry.cr5@2025FY]]，偏高", _ledger(), AS_OF)
+    assert body == "行业 CR5 81.72%[^1]，偏高"

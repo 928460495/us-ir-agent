@@ -151,3 +151,13 @@ def test_速览表里的长名称缩短_正文保留全文():
     out = layout("strategy", f"不确定性: {long} | revenue_growth | 下调 | 年报", None)
     table, body = out.split("\n### ", 1)
     assert long not in table and "…" in table and long in body
+
+
+def test_速览表不列没有结论的行():
+    out = layout("macro_view", "政策取向: 收紧 | 甲\n排除: 汇率 | 波动不大\n跟踪: 指标 | 事件 | 证伪", None)
+    table = out.split("\n### ")[0]
+    assert "收紧" in table and "汇率" not in table and "指标" not in table
+
+
+def test_都没有结论时不出速览表():
+    assert "结论速览" not in layout("macro_view", "排除: 汇率 | 波动不大", None)

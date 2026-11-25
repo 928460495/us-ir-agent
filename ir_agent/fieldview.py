@@ -211,9 +211,9 @@ def layout(name: str, text: str, review, *, note: str = "", title: str = "") -> 
     items = _scan(name, text)
     secs = [x for x in items if isinstance(x, _Section)]
     rest = _attach(secs, review)
-    if secs:
+    if any(s.verdict for s in secs):
         head += ["## 结论速览", "", "| 类别 | 名称 | 结论 |", "| --- | --- | --- |"]
-        head += [f"| {s.kind} | {_short(s.name)} | {_short(s.verdict)} |" for s in secs]
+        head += [f"| {s.kind} | {_short(s.name)} | {_short(s.verdict)} |" for s in secs if s.verdict]
         head += [""]
     body: list[str] = []
     group, headed = "", False

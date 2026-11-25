@@ -33,7 +33,7 @@ _CSS = """
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;scroll-padding-top:16px}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-body{margin:0;background:var(--bg);color:var(--ink);
+body{margin:0;background:var(--bg);color:var(--ink);overflow-wrap:anywhere;
 font:.9375rem/1.75 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
 .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 80px}
 .cols{display:grid;grid-template-columns:200px minmax(0,1fr);gap:40px;align-items:start}
@@ -57,10 +57,10 @@ h5,h6{font-size:.92rem;margin:18px 0 6px;color:var(--dim)}
 .light.ok{color:var(--ok);border-color:var(--ok)}
 .light.warn{color:var(--warn);border-color:var(--warn)}
 .light.bad{color:var(--bad);border-color:var(--bad);font-weight:700}
-.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;margin:0 0 28px;
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;margin:0 0 28px;
 background:var(--rule);border:1px solid var(--rule)}
 .fig{background:var(--card);padding:12px 14px}
-.fig b{display:block;font-size:1.15rem;font-variant-numeric:tabular-nums}
+.fig b{display:block;font-size:1.1rem;overflow-wrap:normal;word-break:keep-all;font-variant-numeric:tabular-nums}
 .fig span{color:var(--dim);font-size:.78rem}
 .card{background:var(--card);border:1px solid var(--rule);padding:18px 22px;margin-bottom:14px;overflow-wrap:anywhere}
 .card>:first-child{margin-top:0}.card>:last-child{margin-bottom:0}
@@ -76,7 +76,7 @@ button.num:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 background:var(--card);border:1px solid var(--rule);box-shadow:0 2px 8px rgb(0 0 0/.15)}
 @supports (position-area:block-start){[popover].tip{position-area:block-start;
 position-try-fallbacks:flip-block;inset:auto;margin:0}}
-.nw{white-space:nowrap}
+.nw{white-space:nowrap;max-width:100%}
 .tbl{overflow:auto;margin:0 0 14px}
 .tbl:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 caption{caption-side:top;text-align:left;color:var(--dim);font-size:.8rem;padding:0 0 6px}

@@ -39,7 +39,7 @@ def _lookup(m: re.Match[str], ledger, as_of: date):
 
 
 # 占位符后面隔这些字就算「紧跟」：模型常写「[[CPI]] 为 3.72%」「[[营收]] 393.75亿」（历史产物里一成多如此）
-_NEXT_NUM = re.compile(r"[\s（(]{0,2}(?:为|是|约|仅|即|＝|=)?\s?(-?\d[\d,]*(?:\.\d+)?)")
+_NEXT_NUM = re.compile(r"[\s（(，,]{0,2}(?:为|是|约|仅|即|＝|=)?\s?(-?\d[\d,]*(?:\.\d+)?)")
 _ALONE_BEFORE = re.compile(r"(?:^|[。！？；|\n])\s*$")
 _ALONE_AFTER = re.compile(r"^\s*(?:$|[。！？；|\n])")
 
@@ -63,7 +63,8 @@ def _display(m: re.Match[str], fact, text: str) -> str:
         return shown
     nxt = _NEXT_NUM.match(text[m.end():m.end() + 24])
     if nxt and nxt.start(1) <= 8 and _same_number(shown, nxt.group(1)):
-        return f"{label}（{fact.period}）"
+        # 前面已经写了这个名字（「高收益债利差 [[…]] 仅 3.63%」）：只留脚注
+        return "" if text[:m.start()].rstrip(" 　（(：:").endswith(label) else f"{label}（{fact.period}）"
     if _ALONE_BEFORE.search(text[:m.start()]) and _ALONE_AFTER.match(text[m.end():]):
         return f"{label} {shown}"
     return shown
