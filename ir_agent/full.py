@@ -2958,6 +2958,45 @@ def _write_dashboard(r, out: Path, md: dict, code: str, arts: dict) -> None:
     arts["工作簿"] = str(out / "model.xlsx")
 
 
+def _audit_from_md(text: str):
+    """落盘的简报 → 看板正文用的审计结果：正文取「数据来源」之前，脚注从那张表读回。"""
+    from ir_agent.audit import AuditResult
+    from ir_agent.citation import Footnote
+
+    body, _, tail = text.partition("\n## 数据来源")
+    notes = []
+    for ln in tail.split("\n"):
+        c = [x.strip() for x in ln.strip().strip("|").split("|")]
+        if len(c) == 5 and "@" in c[1]:
+            key, _, per = c[1].partition("@")
+            try:
+                notes.append(Footnote(len(notes) + 1, key, per, c[2], date.fromisoformat(c[3]), c[4], display=c[0]))
+            except ValueError:
+                continue
+    return AuditResult(rendered=re.sub(r"\n---\s*$", "", body.rstrip()), footnotes=notes)
+
+
+def run_views(code: str, r, as_of: date, out_dir: str | Path, *, snapshot_dir: str | Path = "snapshots",
+              notes: list[str] | None = None) -> list[Path]:
+    """不调模型，重新生成阅读版与看板（spec 2026-11-25-readable-layout §4.7）。不写 `state.json`。
+
+    已出研报的目录只更新阅读版：那份看板含估值卡片，不重跑建模就重出不了，不拿缺估值的盖掉它。"""
+    out = Path(out_dir)
+    notes = notes if notes is not None else []
+    md, _pr = _restore_state(out)
+    _analyse_facts(code, r, as_of, snapshot_dir)
+    notes += _restore_corpus(r, out, md, sections=False)
+    arts: dict[str, str] = {}
+    kw = _readable_views(r, out, md, arts, notes)
+    done = [Path(p) for p in arts.values()]
+    if (out / REPORT).exists():
+        notes.append("已出研报：看板含估值卡片，不重出（要更新看板请重跑 --value）")
+        return done
+    if (out / BRIEF).exists():
+        r.audit = _audit_from_md((out / BRIEF).read_text(encoding="utf-8"))
+    return [*done, build_dashboard(r, path=out / "dashboard.html", **kw)]
+
+
 def run_analyse(code: str, r, as_of: date, out_dir: str | Path, *,
                 model: str | None = None,
                 snapshot_dir: str | Path = "snapshots") -> ResearchOutcome:

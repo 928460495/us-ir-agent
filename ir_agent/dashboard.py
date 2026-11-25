@@ -125,7 +125,20 @@ def _marked(audit) -> tuple[str, dict[str, str]]:
     def sub(m):
         n = by.get((m.group(2), m.group(3)))
         return f"{n.display}[^{n.marker}]" if n is not None else m.group(0)
-    return (REF_RE.sub(sub, audit.draft) if audit.draft else audit.rendered), notes
+    if audit.draft:
+        return REF_RE.sub(sub, audit.draft), notes
+    # 没有原稿（由落盘的成稿重出）：按显示值找，同值的几个指标把来源都列出来
+    text, by_val = audit.rendered, {}
+    for n in audit.footnotes:
+        if n.display:
+            by_val.setdefault(n.display, []).append(str(n.marker))
+    marks = {v: ms[0] for v, ms in by_val.items()}
+    for ms in by_val.values():
+        notes[ms[0]] = "；或 ".join(dict.fromkeys(notes[m] for m in ms))
+    if marks:
+        rx = "|".join(re.escape(v) for v in sorted(marks, key=len, reverse=True))
+        text = re.sub(rf"(?<![\d.,])(?:{rx})(?![\d])", lambda m: f"{m.group(0)}[^{marks[m.group(0)]}]", text)
+    return text, notes
 
 
 def _latest(run, key: str):
