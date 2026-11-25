@@ -2095,6 +2095,8 @@ def _qual_module(out: Path, *, prefix: str, label: str, corpus, parse, facts, ru
 
 def _qual_section(statuses: list) -> str:
     """门① `sources.md` 的「定性分析审核」一节（spec 六）。"""
+    from ir_agent import mdview
+
     if not statuses:
         return ""
     lines = ["", "## 定性分析审核", ""]
@@ -2105,7 +2107,8 @@ def _qual_section(statuses: list) -> str:
             head = "沿用上轮审核结论（" if s["state"] == "沿用审核结论" else ""
             lines.append(f"- {s['label']}：{head}第 {s['rounds']} 轮审核通过"
                          + ("）" if head else ""))
-        lines += [f"  - {x}" for x in s.get("flagged") or []]
+        for x in s.get("flagged") or []:
+            lines += [f"  {row}" for row in mdview.normalize(f"- {x}").rstrip("\n").split("\n")]
         if s.get("note"):
             lines.append(f"  - ⚠ {s['note']}")
     return "\n".join(lines) + "\n"
