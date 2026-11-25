@@ -3196,6 +3196,13 @@ def _sign_header(path: Path, out: Path) -> None:
         path.write_text(line + body, encoding="utf-8")
 
 
+def _balance_context(sb) -> str:
+    """辩论② 的结论进简报撰写提示词。结论全文里有不少外部转述的数字（网页、研报），不在账本里 ——
+    写明不能照抄，否则撰写者抄进正文会被裸数字审计驳回。"""
+    return (f"**多空平衡点**（结论里没有占位符的数字是外部读数，正文不得照抄：改用占位符，或改成不带数字的说法）"
+            f"\n\n{sb.summary()}")
+
+
 def run_brief(code: str, r, as_of: date, out_dir: str | Path,
               verified_by: str, *, model: str | None = None,
               snapshot_dir: str | Path = "snapshots",
@@ -3301,7 +3308,7 @@ def run_brief(code: str, r, as_of: date, out_dir: str | Path,
     body = None
     try:
         body, _ = write_body(cat, client, code=code, period=r.period, brief=True,
-                             context=f"**多空平衡点**\n\n{sb.summary()}",
+                             context=_balance_context(sb),
                              **{k: v or None
                                 for k, v in _prompt_bundle(pr).items()})
     except (AnalystRefused, ClaudeCliError) as e:
