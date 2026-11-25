@@ -180,3 +180,24 @@ def test_判断项阶段也写阅读版():
     from ir_agent import full
     assert "_readable_views(" in inspect.getsource(full.run_assume)
     assert "_readable_views(" in inspect.getsource(full.run_valuation)
+
+
+def test_宏观跟踪读数进阅读版(out):
+    """跟踪指标的最新读数不在 macro_view.md 里，只有 macro_track.json —— 阅读版要带上，否则门①看不到。"""
+    _write(out, "macro_view.md", "政策取向: 收紧 | 甲\n跟踪: 实际利率 | 加息 | 回落则不成立")
+    (out / "macro_track.json").write_text(json.dumps({"items": [
+        {"indicator": "实际利率", "driver": "加息", "falsifier": "回落则不成立", "conclusion": "11 月为 2.79%",
+         "sources": ["https://a.b/c"], "published": {"https://a.b/c": "2026-11-23"}},
+        {"indicator": "另一个", "driver": "d", "falsifier": "f", "conclusion": "", "sources": [], "published": {}}],
+        "truncated": [], "failed": [], "removed": [], "docs": []}, ensure_ascii=False), encoding="utf-8")
+    readable.write_readables(out, _ledger(), AS_OF)
+    t = _view(out, "macro_view")
+    for x in ("跟踪指标最新读数", "11 月为 2.79%", "https://a.b/c", "2026-11-23", "未取到"):
+        assert x in t
+
+
+def test_跟踪文件坏了不影响宏观阅读版(out):
+    _write(out, "macro_view.md", "政策取向: 收紧 | 甲")
+    _write(out, "macro_track.json", "{坏")
+    readable.write_readables(out, _ledger(), AS_OF)
+    assert "政策取向" in _view(out, "macro_view")

@@ -43,6 +43,11 @@ def money_unit(code: str) -> str:
     return "美元" if is_us(code) else "元"
 
 
+def engine_name(code: str) -> str:
+    """估值引擎名：A 股 ashare-dcf，美股 us-dcf。"""
+    return "us-dcf" if is_us(code) else "ashare-dcf"
+
+
 def quote_symbol(code: str) -> str:
     """行情接口用的小写前缀符号，如 sh600519。"""
     return market_of(code).lower() + code

@@ -221,25 +221,18 @@ def inline(text: str, notes: dict[str, str], ids: _Ids) -> str:
 
 
 def _ul(items: list[tuple[int, str, str]], notes, ids, fold_over: int) -> str:
-    """[(级, 标记, 文字)] → 嵌套列表。"""
-    out: list[str] = []
-    stack: list[str] = []
-    for lv, mark, body in items:
-        tag = "ol" if mark[:-1].isdigit() else "ul"
-        lv = min(lv, len(stack))                       # 缩进跳级按一级算
-        while len(stack) > lv + 1:
-            out.append(f"</li></{stack.pop()}>")
-        if len(stack) == lv + 1:
-            out.append("</li>")
-        else:
-            out.append(f"<{tag}>")
-            stack.append(tag)
-        out.append(f"<li>{inline(body, notes, ids)}")
-    while stack:
-        out.append(f"</li></{stack.pop()}>")
-    h = "".join(out)
-    top = sum(1 for lv, _m, _b in items if lv == 0)
-    return f"<details><summary>共 {top} 条，点开看</summary>{h}</details>" if fold_over and top > fold_over else h
+    """[(级, 标记, 文字)] → 嵌套列表。任何一层超过 `fold_over` 条都折叠。"""
+    top = min(lv for lv, _m, _b in items)
+    starts = [i for i, (lv, _m, _b) in enumerate(items) if lv <= top]
+    if starts[0] != 0:
+        starts = [0, *starts]
+    tag = "ol" if items[0][1][:-1].isdigit() else "ul"
+    lis = []
+    for a, b in zip(starts, [*starts[1:], len(items)]):
+        kids = items[a + 1:b]
+        lis.append(f"<li>{inline(items[a][2], notes, ids)}" + (_ul(kids, notes, ids, fold_over) if kids else "") + "</li>")
+    h = f"<{tag}>" + "".join(lis) + f"</{tag}>"
+    return f"<details><summary>共 {len(lis)} 条，点开看</summary>{h}</details>" if fold_over and len(lis) > fold_over else h
 
 
 def _cells(row: str) -> list[str]:
@@ -256,17 +249,24 @@ def _table(rows: list[str], notes, ids) -> str:
 
 
 def to_html(text: str, notes: dict[str, str] | None = None, *, base: int = 2, uid: str = "v",
-            fold_over: int = 0) -> str:
+            fold_over: int = 0, fold_heads: tuple[str, ...] = ()) -> str:
     """规整 Markdown → HTML。`notes` 是脚注号 → 来源说明；`base` 为正文最高标题级别；`uid` 区分同页多次渲染。
-    `fold_over` > 0 时，超过这么多条的列表折叠。全部文字先转义，链接只放行 http/https。"""
+    `fold_over` > 0 时，超过这么多条的列表折叠；标题以 `fold_heads` 之一开头的小节（到下一个标题为止）折叠。全部文字先转义，链接只放行 http/https。"""
     notes, ids = notes or {}, _Ids(uid)
     bl = blocks(text)
     heads = [len(HEADING_RX.match(b[1][0]).group(1)) for b in bl if b[0] == "head"]
     shift = base - min(heads) if heads else 0
     out: list[str] = []
+    folding = False
     for kind, lines in bl:
         if kind == "head":
             m = HEADING_RX.match(lines[0])
+            if folding:
+                out.append("</details>")
+            folding = bool(fold_heads) and m.group(2).startswith(fold_heads)
+            if folding:
+                out.append(f"<details><summary>{inline(m.group(2), notes, ids)}</summary>")
+                continue
             lv = max(1, min(6, len(m.group(1)) + shift))
             out.append(f'<h{lv} id="h-{ids.next()}">{inline(m.group(2), notes, ids)}</h{lv}>')
         elif kind == "list":
@@ -285,6 +285,8 @@ def to_html(text: str, notes: dict[str, str] | None = None, *, base: int = 2, ui
             out.append(f"<pre><code>{_e(chr(10).join(body))}</code></pre>")
         else:
             out.append(f"<p>{inline(lines[0], notes, ids)}</p>")
+    if folding:
+        out.append("</details>")
     return "\n".join(out)
 
 

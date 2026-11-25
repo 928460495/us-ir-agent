@@ -217,6 +217,26 @@ def debate_markdown(text: str) -> str:
     return "\n".join(out)
 
 
+def _track_section(out: Path) -> str:
+    """跟踪指标的最新读数（`macro_track.json`）。证伪与否交人判断，读数与证伪条件并列。"""
+    from ir_agent import macro_track
+
+    res = macro_track.load(out / macro_track.TRACK_JSON, None)
+    if res is None or not (res.items or res.failed):
+        return ""
+    lines = ["", "## 跟踪指标最新读数", ""]
+    for i in res.items:
+        lines += [f"### {i.indicator}", "", f"**对应传导**：{i.driver}", "", f"**证伪条件**：{i.falsifier}", "",
+                  f"**最新读数**：{i.conclusion or '未取到'}", ""]
+        for u in i.sources:
+            lines.append(f"- 出处：{u}" + (f"（发布 {d}）" if (d := i.published.get(u)) else ""))
+        lines.append("")
+    lines += [f"⚠ 检索失败：{x}" for x in res.failed]
+    if res.truncated:
+        lines.append(f"⚠ 超过上限未检索：{'、'.join(res.truncated)}")
+    return "\n" + mdview.normalize("\n".join(lines))
+
+
 def _field_doc(name: str):
     def build(src: Path, out: Path, title: str) -> str:
         from ir_agent import fieldview
@@ -231,7 +251,8 @@ def _field_doc(name: str):
                 review, note = ReviewResult.from_json(rec), ""
             else:
                 note = "这份稿经人工修改，以签名确认的版本为准；改动前的审核意见不再列出"
-        return fieldview.layout(name, raw, review, note=note, title=title)
+        doc = fieldview.layout(name, raw, review, note=note, title=title)
+        return doc + _track_section(out) if name == "macro_view" else doc
     return build
 
 
