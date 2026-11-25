@@ -83,7 +83,8 @@ caption{caption-side:top;text-align:left;color:var(--dim);font-size:.8rem;paddin
 /* 首屏以下的长表：滚到附近再排版绘制；auto 记住真实高度，避免滚动条跳动 */
 .defer{content-visibility:auto;contain-intrinsic-size:auto 600px}
 table{border-collapse:collapse;width:100%;font-size:.88rem}
-th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);vertical-align:top;
+overflow-wrap:normal;min-width:4.5em}
 th{color:var(--dim);font-weight:600;font-size:.78rem;white-space:nowrap}
 .mono{font-size:.8rem;color:var(--dim)}
 code{font:.88em ui-monospace,Menlo,monospace;background:var(--soft);padding:1px 4px}

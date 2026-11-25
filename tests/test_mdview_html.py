@@ -81,3 +81,22 @@ def test_长名单折叠():
 def test_列表超过上限自动折叠():
     h = to_html("\n".join(f"- 剔除 {i}" for i in range(60)) + "\n", fold_over=10)
     assert "共 60 条" in h and "剔除 59" in h
+
+
+# ── 目检暴露的 ─────────────────────────────────────────────────
+
+def test_数字只与紧随的标点绑定_不把整段绑成一行():
+    h = to_html("甲 1%[^1] 中间很长的一段话 2%[^2]，后面", {"1": "t", "2": "u"})
+    for seg in re.findall(r'<span class="nw">(.*?)</span></span>|<span class="nw">(.*?)</span>(?=[^<]|$)', h):
+        assert "中间很长" not in "".join(seg)
+    assert h.count('class="nw"') == 1
+
+
+def test_各种单位都进按钮():
+    for shown in ("49.30 index", "50000 条路径", "1295 千套", "82 家", "-34.39%", "1.18x", "37446.58 亿美元"):
+        assert f">{shown}</button>" in to_html(f"共 {shown}[^1] 等", {"1": "t"})
+
+
+def test_名称末尾的数字不当数值():
+    h = to_html("行业 CR5[^1] 为 81.72%", {"1": "t"})
+    assert ">5</button>" not in h and "行业 CR5" in h

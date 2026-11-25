@@ -159,8 +159,8 @@ _LINK = re.compile(r"\[([^\]\[]+)\]\((https?://[^\s)]+)\)")
 _INLINE_CODE = re.compile(r"`([^`]+)`")
 _BOLD = re.compile(r"\*\*(?=\S)([^*]+?)(?<=\S)\*\*")
 _FOOT = re.compile(r"\[\^(\w+)\]")
-# 脚注紧跟的显示值：数字（含单位）；没有数字就只显示角标
-_VALUE = re.compile(r"(-?\d[\d,]*(?:\.\d+)?(?:\s?(?:亿|万)?(?:美元|元|股|家|分位|年|x|%)|%|x)?)$")
+# 脚注紧跟的显示值：数字连同单位（单位多种多样，不逐个列）；前面是字母的（CR5）不是数值
+_VALUE = re.compile(r"(?<![A-Za-z\d.,])(-?\d[\d,]*(?:\.\d+)?(?:\s?[^\s\d，。；：、（）()|/*]{0,6})?)$")
 
 
 def _e(x) -> str:
@@ -201,8 +201,10 @@ def inline(text: str, notes: dict[str, str], ids: _Ids) -> str:
             v = _VALUE.search(before)
             shown = v.group(1) if v else f"[{m.group(1)}]"
             out.append(before[:v.start()] if v else before)
-            out.append(stash(source_button(_e(shown), _e(tip), f"src-{ids.next()}")))
-            at = m.end()
+            btn, at = source_button(_e(shown), _e(tip), f"src-{ids.next()}"), m.end()
+            if s[at:at + 1] and s[at] in "，。、；：！？）」』》%":      # 紧随的标点与数字绑在一行，免得「，」挤到下一行行首
+                btn, at = f'<span class="nw">{btn}{_e(s[at])}</span>', at + 1
+            out.append(stash(btn))
         return "".join(out) + s[at:]
 
     s = "".join(c for c in text if not 0xE000 <= ord(c) <= 0xF8FF)
@@ -215,9 +217,7 @@ def inline(text: str, notes: dict[str, str], ids: _Ids) -> str:
     for _ in range(3):                                  # 占位符可能嵌套（粗体里有链接）
         out = re.sub(r"[\ue000-\uf8ff]", lambda m: keep[ord(m.group(0)) - 0xE000]
                      if ord(m.group(0)) - 0xE000 < len(keep) else "", out)
-    # 紧随的中文标点与数字绑在一行，否则「，」会被挤到下一行行首
-    return re.sub(r"(<button type=\"button\" class=\"num\".*?</span>)([，。、；：！？）」』》])",
-                  r'<span class="nw">\1\2</span>', out)
+    return out
 
 
 def _ul(items: list[tuple[int, str, str]], notes, ids, fold_over: int) -> str:
