@@ -290,7 +290,7 @@ def build_dashboard(
             f"{len(a.footnotes)} 条引用，每条可反查到原始接口响应</summary>"
             f'<div class="tbl" tabindex="0" role="region" aria-labelledby="cap-fn">'
             f'<table><caption id="cap-fn">引用溯源明细</caption><thead><tr>'
-            f'<th scope="col">#</th><th scope="col">指标</th><th scope="col">来源</th>'
+            f'<th scope="col">序号</th><th scope="col">指标</th><th scope="col">来源</th>'
             f'<th scope="col">披露日</th><th scope="col">取得方式</th><th scope="col">内部键</th></tr></thead>'
             f"<tbody>{fn}</tbody></table></div></details></div>")
 
