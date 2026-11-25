@@ -94,7 +94,7 @@ def test_write_readables_only_for_existing_sources(tmp_path):
     f = tmp_path / "macro_view_阅读版.md"
     assert written == [f]
     body = f.read_text(encoding="utf-8")
-    assert body.startswith("> 只读阅读版") and "修改请改 `macro_view.md`" in body and "81.72%" in body
+    assert "> 只读阅读版" in body and "修改请改 `macro_view.md`" in body and "81.72%" in body
     assert (tmp_path / "macro_view.md").read_text(encoding="utf-8") == src      # 源文件不动
     assert not (tmp_path / "strategy_阅读版.md").exists()
 

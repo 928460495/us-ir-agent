@@ -2911,13 +2911,27 @@ def _missing_snapshot_notes(res) -> list:
     return out
 
 
-def _readable_views(r, out: Path, md: dict, arts: dict) -> dict:
+def _display_title(r) -> str:
+    """阅读版与看板的标题：公司名 + 代码；公司名只用本轮已取到的，不为它联网。"""
+    code = getattr(r, "code", "") or ""
+    name = ""
+    try:
+        if (sid := (getattr(r, "sec_meta", None) or {}).get("submissions_sid")):
+            name = r.store.load(sid).payload.get("name") or ""
+        else:
+            name = r.peer_set.target_name or ""
+    except Exception:                                       # noqa: BLE001
+        name = ""
+    return " ".join(x for x in (name, code) if x)
+
+
+def _readable_views(r, out: Path, md: dict, arts: dict, skipped: list | None = None) -> dict:
     """写定性产物的只读阅读版（`readable`，用户 2026-11-22 选方案 A），返回看板用的上下文副本：
     占位符换成账本数值。**原 `md` 不动** —— 它进 state.json 与后续撰写提示词，那里要的是占位符。
     每次生成看板都重写，人改过源文件后下一次调用即刷新。"""
     from ir_agent import readable
 
-    for f in readable.write_readables(out, r.ledger, r.as_of):
+    for f in readable.write_readables(out, r.ledger, r.as_of, title=_display_title(r), notes=skipped):
         arts[f"{readable.LABELS[f.name[:-len(readable.SUFFIX)]]}（阅读版）"] = str(f)
     return {k: readable.render_inline(v, r.ledger, r.as_of) if isinstance(v, str) else v
             for k, v in (md or {}).items()}
@@ -3401,6 +3415,7 @@ def run_assume(code: str, r, as_of: date, out_dir: str | Path,
     _save_state(out, code, r, as_of, md, pr, reviewed_by=reviewed_by)
     if ASSUMPTIONS_ART in arts:
         _sign_header(out / ASSUMPTIONS_MD, out)
+    _readable_views(r, out, md, arts, skipped)              # 门③ 的人读判断项阅读版
     # **按本轮登记的产物定状态，不看磁盘上有没有那个文件。** 上一轮残留的
     # assumptions.json 会让这一轮 `_propose_assumptions` 的失败伪装成成功 ——
     # 与「上一轮残留的 assumptions.md 把第一阶段的失败伪装成第二阶段的失败」

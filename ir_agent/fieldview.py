@@ -258,6 +258,17 @@ def segments(text: str) -> list[list[str]]:
     return out
 
 
+_FINE = re.compile(r"[|「」“”`，。；：！？、（）()\[\]【】《》⚠—…*#>\s]+")
+# 排版时换了写法、不要求逐字出现的词：取得方式译成中文，表头改名，「同上」随整列合并
+REWORDED = frozenset({"computed", "reported", "字段期间", "同上"})
+
+
+def lost_fine(src: str, out: str) -> list[str]:
+    """通用层用的核对：按标点切成小段（审核意见会被拆成「理由 / 建议」几行，整行对不上不算丢）。"""
+    o = squash(out)
+    return [s for x in _FINE.split(_REF.sub("|", src or "")) if len(s := squash(x)) >= 2 and s not in o and s not in REWORDED]
+
+
 def _strip_keys(segs: list[str]) -> list[str]:
     """行首的字段名在排版里变成标题，不要求逐字出现。"""
     keys = [k for ks in _FIELDS.values() for k in ks]
