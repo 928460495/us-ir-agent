@@ -15,11 +15,27 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from ir_agent.ledger import Fact, Method
 from ir_agent.periods import sort_key
 from ir_agent.sources import edgar
 from ir_agent.sources.us_periods import fiscal_label
+
+
+
+def _load_ci():
+    """us-dcf 的 `current_investments`（不依赖其他模块的纯函数）：账本层与估值层共用同一套勾稽。"""
+    import importlib.util
+
+    p = Path(__file__).resolve().parents[2] / "us-dcf" / "current_investments.py"
+    spec = importlib.util.spec_from_file_location("current_investments", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+CI = _load_ci()
 
 FORMS = ("10-K", "10-Q", "10-K/A", "10-Q/A")
 MONEY_UNIT, CURRENCY, SHARE_UNIT = "美元", "USD", "股"
@@ -64,7 +80,8 @@ _DURATION: dict[str, tuple[str, ...]] = {
 _INSTANT: dict[str, tuple[str, ...]] = {
     "cash_and_equivalents": ("CashAndCashEquivalentsAtCarryingValue",
                              "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"),
-    "trading_finasset": ("ShortTermInvestments", "MarketableSecuritiesCurrent",
+    # 首选：与资产负债表主表勾稽上的值（NVDA 换标签后按优先序会落到附注口径，2026-11-25）
+    "trading_finasset": (CI.TAG, "ShortTermInvestments", "MarketableSecuritiesCurrent",
                          "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
                          "AvailableForSaleSecuritiesDebtMaturitiesWithinOneYearFairValue"),
     "accounts_receivable": ("AccountsReceivableNetCurrent", "ReceivablesNetCurrent"),
@@ -188,7 +205,7 @@ def _cover_page_shares(dei: dict, source_id: str) -> list[Fact]:
 def parse_companyfacts(doc: dict, fye_mmdd: str, source_id: str,
                        notes: list[str] | None = None) -> list[Fact]:
     notes = notes if notes is not None else []
-    gaap = doc.get("facts", {}).get("us-gaap", {})
+    gaap = CI.add_tied(doc.get("facts", {}).get("us-gaap", {}))
     out: list[Fact] = []
     for table, duration in ((_DURATION, True), (_INSTANT, False)):
         for key, tags in table.items():
@@ -238,7 +255,7 @@ def _cash_begin(facts: list[Fact]) -> list[Fact]:
 
 MAPPED_TAGS: frozenset[str] = frozenset(
     t for table in (_DURATION, _INSTANT, _SHARES_DURATION, _DA_PARTS)
-    for tags in table.values() for t in tags) | frozenset(_DA_TOTAL)
+    for tags in table.values() for t in tags) | frozenset(_DA_TOTAL) | CI.COMPONENTS
 
 
 def slim(doc: dict) -> dict:

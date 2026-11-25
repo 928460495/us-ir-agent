@@ -65,11 +65,13 @@ def _doc_note(d) -> str:
     return pub
 
 
-def render(rows: list[SourceRow], gaps: list[tuple[str, int]]) -> str:
+def render(rows: list[SourceRow], gaps: list[tuple[str, int]], timing: str = "") -> str:
     """生成 sources.md。`gaps` 是 (来源名, 本轮涉及的引用条数)。"""
     lines = ["# 资料来源清单（门①：请逐条核验）", "",
              "本清单给出每份资料的出处与本地文件位置。**核验通过后，"
              "用 `--verified-by <你的名字>` 进入下一阶段。**", ""]
+    if timing:
+        lines += ["## ⚠ 时点提示", "", timing, ""]
     if gaps:
         lines += ["## ⚠ 以下来源不具备完整可溯源性", "",
                   "这是**结构性限制，非本轮故障** —— 数字可溯源到账本条目，"

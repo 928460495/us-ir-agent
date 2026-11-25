@@ -71,7 +71,7 @@ def _load_macro(r, as_of: date) -> tuple[str, str, str]:
     return snap.describe(), snap.for_prompt(), ""
 
 
-def _external_md(corpus, consensus) -> str:
+def _external_md(corpus, consensus, timing: str = "") -> str:
     """外部资料清单的人读版。**唯一一处渲染口径。**
 
     此前这段拼接只写在 `_load_external` 里，于是它渲染的是「券商研报入库
@@ -88,7 +88,8 @@ def _external_md(corpus, consensus) -> str:
 
     if corpus is None:
         return ""
-    return corpus.summary() + "\n\n" + C.consensus_md(consensus)
+    head = f"⚠ 时点提示：{timing}\n\n" if timing else ""
+    return head + corpus.summary() + "\n\n" + C.consensus_md(consensus)
 
 
 def _refresh_external_md(r, md: dict) -> None:
@@ -99,7 +100,7 @@ def _refresh_external_md(r, md: dict) -> None:
     """
     if getattr(r, "corpus", None) is None:
         return
-    md["外部资料"] = _external_md(r.corpus, getattr(r, "consensus", None))
+    md["外部资料"] = _external_md(r.corpus, getattr(r, "consensus", None), getattr(r, "timing_note", ""))
 
 
 def _load_external(code: str, r, as_of: date) -> tuple[str, str, str]:
@@ -189,6 +190,8 @@ def _load_external_us(code: str, r, as_of: date) -> tuple[str, str, str]:
     for line in gov_md:
         md += "\n" + line
     prompt = C.consensus_prompt(cs) if cs is not None else ""
+    if getattr(r, "timing_note", ""):            # 撰写、辩论看得到这条，才不会把上一季的 TTM 当最新
+        prompt = f"时点提示：{r.timing_note}\n{prompt}"
     return md, prompt, ("外部资料（" + "；".join(notes) + "）") if notes else ""
 
 
@@ -977,7 +980,7 @@ def _load_value_chain(r, as_of: date, client, *, out: Path | None = None,
         sid, why = _size_source(view.size, r.corpus, r.store)
         if sid is not None:
             r.ledger.put(view.size.to_fact(sid, as_of))
-        else:
+        elif why:                       # 原因为空 = 复述账本里的行业合计，本就不另记
             err = f"产业链：外部行业规模未入账本（{why}）"
     return view.summary(), view.summary(), err
 
@@ -2022,12 +2025,14 @@ class QualStop(Exception):
 
 def _qual_catalog(r, as_of: date) -> str:
     """审核者的账本事实目录（用户决定 6）。取不到时给空串，不拦审核。"""
+    note = getattr(r, "timing_note", "")
+    head = f"时点提示：{note}\n" if note else ""
     try:
-        return FactCatalog.from_ledger(r.ledger, period=r.period, as_of=as_of,
-                                       extra_periods=_catalog_periods(r)
-                                       ).render_for_prompt()
+        return head + FactCatalog.from_ledger(r.ledger, period=r.period, as_of=as_of,
+                                              extra_periods=_catalog_periods(r)
+                                              ).render_for_prompt()
     except Exception:                                       # noqa: BLE001
-        return ""
+        return head
 
 
 # 定性模块落盘前缀 → 采集模块键（指纹只对该模块看得见的文档取，spec 2026-11-21-staged-collection §6）
@@ -3000,7 +3005,7 @@ def run_analyse(code: str, r, as_of: date, out_dir: str | Path, *,
         peers=_peer_names(code),
         annual=(annual_url, annual_local),
         store=getattr(r, "store", None), code=code)
-    (out / SOURCES_MD).write_text(render(rows, _snapshot_gaps(r))
+    (out / SOURCES_MD).write_text(render(rows, _snapshot_gaps(r), getattr(r, "timing_note", ""))
                                   + _qual_section(statuses), encoding="utf-8")
     (out / SOURCES_JSON).write_text(
         json.dumps({"rows": [vars(x) for x in rows], "verified_by": ""},

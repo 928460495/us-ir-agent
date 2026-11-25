@@ -94,6 +94,7 @@ class ResearchRun:
     annual_url: str = ""            # 年报 PDF，战略/产业链要从中抽叙述章节
     corpus: object = None           # Corpus: 公司之外的资料
     consensus: object = None        # Consensus: 卖方一致预期（仅作对照）
+    timing_note: str = ""           # 时点提示（美股：业绩已发布而定期报告未申报），进各阶段资料与来源清单
     sec_meta: dict = None           # 美股：{"submissions_sid": …}，定性层从快照读申报清单
 
     def __post_init__(self) -> None:
@@ -577,6 +578,11 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
         warnings.append(shares_why)
     spot = next((f.period for f in quote_res.facts if f.key == "market_cap"), None)
 
+    from ir_agent.sources.edgar_filings import pending_report
+    timing = pending_report(sub_doc, as_of)
+    if timing:
+        warnings.append(timing)
+
     # 年报叙述章节（战略、产业链用）：时点内最新的 10-K。submissions 已落快照，不再请求
     from ir_agent.sources.tenk import latest_10k
     sub = store.load(sec_sids["submissions"]).payload
@@ -587,6 +593,7 @@ def _run_us(code: str, year: int, as_of: date, snapshot_dir: Path | str,
 
     run = _analyze(ticker, year, period_suffix, period, prior_period, as_of, led, store,
                    fin, quote_res, spot, warnings, False, {}, annual_url)
+    run.timing_note = timing
     run.sec_meta = {"submissions_sid": sec_sids["submissions"],
                     "companyfacts_sid": sec_sids["companyfacts"], "fye": fye}
     return run

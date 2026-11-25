@@ -17,6 +17,8 @@ from __future__ import annotations
 import json, os, time, urllib.parse, urllib.request, urllib.error, datetime as dt, tempfile
 import numpy as np, pandas as pd
 
+import current_investments
+
 MN = 1e6                       # 百万美元
 _GENERIC_UA = {"User-Agent": "Mozilla/5.0"}
 _CACHE = os.path.join(tempfile.gettempdir(), "us_dcf_cache")
@@ -239,7 +241,8 @@ TAGS_BS = {   # 时点数
     # INTC 2021–2023 只申报含受限资金的口径（受限部分很小，可接受）
     "现金及等价物": ["CashAndCashEquivalentsAtCarryingValue",
                      "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
-    "短期投资": ["ShortTermInvestments", "MarketableSecuritiesCurrent",
+    # 首选：与主表勾稽上的值（current_investments）；勾稽不上才按下面的优先序
+    "短期投资": [current_investments.TAG, "ShortTermInvestments", "MarketableSecuritiesCurrent",
                  "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
                  "AvailableForSaleSecuritiesDebtMaturitiesWithinOneYearFairValue"],
     "应收账款": ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"],
@@ -516,6 +519,7 @@ def statements(g: dict, ticker: str, nyears: int = 5, splits: list | None = None
     """归一化三表。返回 DataFrame（行=期末日，列=科目，单位百万美元）+ 抽取诊断。
     splits 给定时不再自行取拆股记录（上游由 Tiingo 日线的 splitFactor 提取）。"""
     sp = splits if splits is not None else split_history(ticker)
+    g = current_investments.add_tied(g)
     rev = series(g, TAGS_IS["营业收入"])
     if not rev:
         raise DataError("取不到任何年度营业收入 —— 该公司可能不按 us-gaap 申报，或刚上市。")

@@ -67,6 +67,28 @@ def _other_exhibits(index_html: str, main_url: str) -> list[tuple[str, str]]:
     return out
 
 
+PENDING_DAYS = 30              # 定期报告申报后这么多天以内的业绩 8-K 算同一期的补充披露
+
+
+def pending_report(sub: dict, as_of: date) -> str:
+    """最新一季业绩已用 8-K 发布、定期报告（10-Q / 10-K）还没申报时的时点提示；没有这种情形给空串。
+
+    账本与 TTM 只认定期报告的 XBRL，这段时间里会停在上一季 —— NVDA 2026-11-25：11-17 已发第三季度业绩，
+    PE(TTM) 仍算到第二季度，产物里没有任何提示。"""
+    r = sub.get("filings", {}).get("recent", {})
+    rows = [(r["form"][i], date.fromisoformat(r["filingDate"][i]), (r.get("items") or [""] * (i + 1))[i] or "",
+             (r.get("reportDate") or [""] * (i + 1))[i] or "") for i in range(len(r.get("form", [])))]
+    rows = [x for x in rows if x[1] <= as_of]
+    periodic = max((x for x in rows if x[0] in ("10-Q", "10-K")), key=lambda x: x[1], default=None)
+    early = max((x[1] for x in rows if x[0] in ("8-K", "8-K/A")
+                 and EARNINGS in [i.strip() for i in x[2].split(",")]), default=None)
+    if periodic is None or early is None or (early - periodic[1]).days <= PENDING_DAYS:
+        return ""
+    return (f"最新一季业绩已于 {early.isoformat()} 以业绩新闻稿发布，对应的定期报告（季报或年报）尚未申报："
+            f"账本、TTM 与由此算出的倍数仍截至 {periodic[3]}（{periodic[1].isoformat()} 申报），"
+            "引用时须写明截止期，并与业绩新闻稿里的最新读数对照")
+
+
 def gather_us(*, sub: dict, as_of: date, corpus, store, company: str,
               months: int = 12) -> AnnounceResult:
     res = AnnounceResult()
